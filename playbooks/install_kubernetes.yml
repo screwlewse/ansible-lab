@@ -1,0 +1,81 @@
+---
+- name: Install MicroK8s
+  hosts: all
+  become: true
+  vars_files:
+    - ../vars.yml
+
+  tasks:
+    - name: Install snapd (if not already installed)
+      apt:
+        name: snapd
+        state: present
+        update_cache: true
+
+    - name: Install MicroK8s snap
+      snap:
+        name: microk8s
+        classic: true
+        channel: "1.29/stable"
+        state: present
+
+    - name: Add user to microk8s group
+      user:
+        name: "{{ ansible_user }}"
+        groups: microk8s
+        append: true
+
+    - name: Wait for MicroK8s to be ready
+      command: microk8s status --wait-ready
+      register: microk8s_status
+      changed_when: false
+      retries: 3
+      delay: 10
+
+    - name: Enable basic MicroK8s addons
+      command: "microk8s enable {{ item }}"
+      loop:
+        - dns
+        - storage
+      register: addon_result
+      changed_when: "'already enabled' not in addon_result.stdout"
+
+    - name: Create kubectl alias in bashrc
+      lineinfile:
+        path: "/home/{{ ansible_user }}/.bashrc"
+        line: 'alias kubectl="microk8s kubectl"'
+        create: true
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+
+    - name: Create kubectl config directory
+      file:
+        path: "/home/{{ ansible_user }}/.kube"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+
+    - name: Export kubeconfig for kubectl
+      shell: microk8s config > /home/{{ ansible_user }}/.kube/config
+      args:
+        creates: "/home/{{ ansible_user }}/.kube/config"
+
+    - name: Set ownership of kubeconfig
+      file:
+        path: "/home/{{ ansible_user }}/.kube/config"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0600'
+
+    - name: Verify MicroK8s installation
+      command: microk8s kubectl get nodes
+      register: k8s_nodes
+      changed_when: false
+      become_user: "{{ ansible_user }}"
+
+    - name: Show MicroK8s status
+      debug:
+        msg: 
+          - "MicroK8s installation completed"
+          - "Nodes: {{ k8s_nodes.stdout_lines }}"
