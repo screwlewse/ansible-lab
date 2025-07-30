@@ -68,14 +68,22 @@
         group: "{{ ansible_user }}"
         mode: '0600'
 
-    - name: Verify MicroK8s installation
-      command: microk8s kubectl get nodes
+    - name: Fix .kube directory ownership
+      file:
+        path: "/home/{{ ansible_user }}/.kube"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        recurse: true
+
+    - name: Verify MicroK8s installation with sudo (since group change needs session restart)
+      command: sudo microk8s kubectl get nodes
       register: k8s_nodes
       changed_when: false
       become_user: "{{ ansible_user }}"
 
     - name: Show MicroK8s status
       debug:
-        msg: 
+        msg:
           - "MicroK8s installation completed"
+          - "Note: You may need to log out and back in for group membership to take effect"
           - "Nodes: {{ k8s_nodes.stdout_lines }}"
