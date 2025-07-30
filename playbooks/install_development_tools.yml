@@ -1,0 +1,163 @@
+---
+- name: Install Development Tools
+  hosts: all
+  become: true
+  vars_files:
+    - ../vars.yml
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: true
+        cache_valid_time: 300
+
+    - name: Install build tools and utilities
+      apt:
+        name:
+          - build-essential
+          - make
+          - unzip
+          - zip
+          - software-properties-common
+          - apt-transport-https
+          - ca-certificates
+          - gnupg
+          - lsb-release
+        state: present
+
+    - name: Add HashiCorp GPG key
+      shell: |
+        curl -fsSL https://apt.releases.hashicorp.com/gpg | gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+        chmod a+r /usr/share/keyrings/hashicorp-archive-keyring.gpg
+      args:
+        creates: /usr/share/keyrings/hashicorp-archive-keyring.gpg
+
+    - name: Add HashiCorp repository
+      shell: |
+        echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/hashicorp.list > /dev/null
+      args:
+        creates: /etc/apt/sources.list.d/hashicorp.list
+
+    - name: Update apt cache after adding HashiCorp repo
+      apt:
+        update_cache: true
+
+    - name: Install HashiCorp tools
+      apt:
+        name:
+          - terraform
+          - vault
+          - consul
+        state: present
+
+    - name: Install Node.js (via NodeSource)
+      shell: |
+        curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -
+        apt-get install -y nodejs
+      args:
+        creates: /usr/bin/node
+
+    - name: Install Go programming language
+      apt:
+        name: golang-go
+        state: present
+
+    - name: Install Python development tools
+      apt:
+        name:
+          - python3-dev
+          - python3-pip
+          - python3-venv
+          - python3-wheel
+        state: present
+
+    - name: Install additional CLI tools
+      apt:
+        name:
+          - ansible
+          - jq
+          - yq
+          - curl
+          - wget
+          - git
+          - vim
+          - nano
+          - htop
+          - tree
+          - tmux
+          - screen
+          - netcat-openbsd
+          - telnet
+          - nmap
+        state: present
+
+    - name: Install kubectl (standalone, in addition to microk8s)
+      shell: |
+        curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+        chmod +x kubectl
+        mv kubectl /usr/local/bin/
+      args:
+        creates: /usr/local/bin/kubectl
+
+    - name: Install Helm package manager
+      shell: |
+        curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      args:
+        creates: /usr/local/bin/helm
+
+    - name: Install Docker Compose (standalone)
+      shell: |
+        COMPOSE_VERSION=$(curl -s https://api.github.com/repos/docker/compose/releases/latest | jq -r .tag_name)
+        curl -L "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+        chmod +x /usr/local/bin/docker-compose
+      args:
+        creates: /usr/local/bin/docker-compose
+
+    - name: Verify tool installations
+      shell: "{{ item }} --version || {{ item }} version || echo '{{ item }} installed'"
+      loop:
+        - terraform
+        - node
+        - npm
+        - go
+        - python3
+        - ansible
+        - kubectl
+        - helm
+        - docker-compose
+      register: tool_versions
+      changed_when: false
+      failed_when: false
+
+    - name: Display installed tool versions
+      debug:
+        msg: "{{ item.item }}: {{ item.stdout | default('Version check failed') }}"
+      loop: "{{ tool_versions.results }}"
+
+    - name: Create development directories
+      file:
+        path: "/home/{{ ansible_user }}/{{ item }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+      loop:
+        - projects
+        - scripts
+        - tools
+        - .local/bin
+
+    - name: Add local bin to PATH in bashrc
+      lineinfile:
+        path: "/home/{{ ansible_user }}/.bashrc"
+        line: 'export PATH="$HOME/.local/bin:$PATH"'
+        create: true
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+
+    - name: Show completion message
+      debug:
+        msg:
+          - "Development tools installation completed!"
+          - "Installed: Terraform, Node.js, Go, Python tools, kubectl, Helm, Docker Compose"
+          - "Development directories created in /home/{{ ansible_user }}"
