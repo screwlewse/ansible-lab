@@ -1,0 +1,19 @@
+---
+- name: Configure SSH Security
+  hosts: all
+  become: true
+  vars:
+    ssh_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO8GnQ44MS1WmbIjlEe+k94H2G+xBTVvyuxvUoS1fQbQ yandereborl@gmail.com"
+
+  tasks:
+    - name: Debug variables
+      debug:
+        msg: 
+          - "ansible_user: {{ ansible_user }}"
+          - "ssh_public_key: {{ ssh_public_key }}"
+
+    - name: Set up SSH keys for current user
+      authorized_key:
+        user: "{{ ansible_user }}"
+        key: "{{ ssh_public_key }}"
+        state: present

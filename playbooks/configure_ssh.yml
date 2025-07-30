@@ -1,0 +1,45 @@
+---
+- name: Configure SSH Security
+  hosts: all
+  become: true
+  vars_files:
+  - ../group_vars/all.yml
+
+  tasks:
+    - name: Disable password authentication
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PasswordAuthentication'
+        line: 'PasswordAuthentication no'
+        backup: true
+      notify: restart sshd
+
+    - name: Enable public key authentication
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PubkeyAuthentication'
+        line: 'PubkeyAuthentication yes'
+      notify: restart sshd
+
+    - name: Disable root login
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PermitRootLogin'
+        line: 'PermitRootLogin no'
+      notify: restart sshd
+
+    - name: Set up SSH keys for current user
+      authorized_key:
+        user: "{{ ansible_user }}"
+        key: "{{ ssh_public_key }}"
+        state: present
+
+    - name: Show SSH configuration status
+      debug:
+        msg: "SSH security configuration completed for {{ ansible_user }}"
+
+  handlers:
+    - name: restart sshd
+      service:
+        name: sshd
+        state: restarted

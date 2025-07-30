@@ -1,0 +1,53 @@
+---
+- name: Update Operating System
+  hosts: all
+  become: true
+  gather_facts: true
+  vars_files:
+    - ../group_vars/all.yml
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: true
+        cache_valid_time: 300
+
+    - name: Upgrade all packages
+      apt:
+        upgrade: dist
+        autoremove: true
+        autoclean: true
+
+    - name: Install essential system packages
+      apt:
+        name:
+          - curl
+          - wget
+          - git
+          - vim
+          - htop
+          - net-tools
+          - apt-transport-https
+          - ca-certificates
+          - gnupg
+          - lsb-release
+          - software-properties-common
+          - unattended-upgrades
+          - python3
+          - python3-pip
+          - jq
+          - tree
+          - tmux
+          - screen
+        state: present
+
+    - name: Configure automatic updates
+      debconf:
+        name: unattended-upgrades
+        question: unattended-upgrades/enable_auto_updates
+        value: 'true'
+        vtype: boolean
+
+    - name: Show completion message
+      debug:
+        msg: "OS update completed successfully on {{ inventory_hostname }}"

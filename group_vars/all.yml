@@ -1,0 +1,2 @@
+ansible_user: "davidg"
+ssh_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO8GnQ44MS1WmbIjlEe+k94H2G+xBTVvyuxvUoS1fQbQ yandereborl@gmail.com"
