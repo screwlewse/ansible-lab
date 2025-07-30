@@ -1,0 +1,135 @@
+---
+- name: Configure System Settings
+  hosts: all
+  become: true
+  vars_files:
+    - ../vars.yml
+
+  tasks:
+    - name: Configure lid close behavior for laptops
+      lineinfile:
+        path: /etc/systemd/logind.conf
+        regexp: "^#?{{ item }}"
+        line: "{{ item }}=ignore"
+        backup: true
+      loop:
+        - HandleLidSwitch
+        - HandleLidSwitchExternalPower
+        - HandleLidSwitchDocked
+      notify: restart systemd-logind
+
+    - name: Check if swap is enabled
+      command: swapon --show
+      register: swap_status
+      changed_when: false
+      failed_when: false
+
+    - name: Disable swap for Kubernetes (if enabled)
+      shell: |
+        swapoff -a
+        sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
+      when: swap_status.stdout != ""
+
+    - name: Create swap disable marker
+      file:
+        path: /etc/no-swap-configured
+        state: touch
+        mode: '0644'
+      when: swap_status.stdout != ""
+
+    - name: Set timezone to America/Los_Angeles
+      timezone:
+        name: America/Los_Angeles
+
+    - name: Configure vim as default editor
+      alternatives:
+        name: editor
+        path: /usr/bin/vim.basic
+        priority: 50
+
+    - name: Enable IP forwarding for Kubernetes
+      sysctl:
+        name: net.ipv4.ip_forward
+        value: '1'
+        state: present
+        reload: true
+
+    - name: Load br_netfilter module
+      modprobe:
+        name: br_netfilter
+        state: present
+
+    - name: Ensure br_netfilter loads on boot
+      lineinfile:
+        path: /etc/modules-load.d/kubernetes.conf
+        line: br_netfilter
+        create: true
+        mode: '0644'
+
+    - name: Configure bridge netfilter for Kubernetes
+      sysctl:
+        name: "{{ item }}"
+        value: '1'
+        state: present
+        reload: true
+      loop:
+        - net.bridge.bridge-nf-call-ip6tables
+        - net.bridge.bridge-nf-call-iptables
+
+    - name: Set hostname to temporary value (will be changed during deployment)
+      hostname:
+        name: ubuntu-template
+
+    - name: Update /etc/hosts for template hostname
+      lineinfile:
+        path: /etc/hosts
+        regexp: '^127\.0\.1\.1'
+        line: '127.0.1.1 ubuntu-template'
+
+    - name: Create system info file
+      copy:
+        content: |
+          Golden Image Template System
+          ============================
+          Created: {{ ansible_date_time.date }}
+          Base OS: Ubuntu {{ ansible_distribution_release }}
+          Kernel: {{ ansible_kernel }}
+
+          Installed Software:
+          - Docker CE
+          - MicroK8s {{ microk8s_channel | default('1.29/stable') }}
+          - Development Tools (Terraform, Node.js, Go, Python)
+          - CLI Tools (kubectl, helm, docker-compose)
+
+          System Configuration:
+          - Swap disabled for Kubernetes
+          - IP forwarding enabled
+          - Bridge netfilter configured
+          - Lid close behavior set to ignore
+          - Timezone: America/Los_Angeles
+          - Default editor: vim
+
+          Users:
+          - davidg (primary user)
+          - labuser (secondary user)
+          Both with sudo, docker, microk8s access
+        dest: /etc/system-info.txt
+        mode: '0644'
+
+    - name: Show system configuration status
+      debug:
+        msg:
+          - "System configuration completed!"
+          - "Laptop lid behavior: ignore (won't suspend when closed)"
+          - "Swap: disabled for Kubernetes"
+          - "Timezone: America/Los_Angeles"
+          - "Default editor: vim"
+          - "Network: configured for Kubernetes"
+          - "Hostname: set to ubuntu-template (temporary)"
+          - "System info saved to /etc/system-info.txt"
+
+  handlers:
+    - name: restart systemd-logind
+      systemd:
+        name: systemd-logind
+        state: restarted

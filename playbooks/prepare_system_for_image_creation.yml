@@ -1,0 +1,152 @@
+---
+- name: Prepare System for Golden Image Creation
+  hosts: all
+  become: true
+  vars_files:
+    - ../vars.yml
+
+  tasks:
+    - name: Clean package cache and remove unnecessary packages
+      apt:
+        autoclean: true
+        autoremove: true
+
+    - name: Clear apt cache
+      command: apt-get clean
+
+    - name: Clear log files
+      shell: |
+        find /var/log -type f -name "*.log" -exec truncate -s 0 {} \;
+        find /var/log -type f -name "*.gz" -delete
+        find /var/log -type f -name "*.1" -delete
+        find /var/log -type f -name "*.old" -delete
+        truncate -s 0 /var/log/wtmp
+        truncate -s 0 /var/log/btmp
+        truncate -s 0 /var/log/lastlog
+
+    - name: Clear systemd journal
+      shell: |
+        journalctl --rotate
+        journalctl --vacuum-time=1s
+
+    - name: Clear bash history for all users
+      shell: |
+        rm -f /home/*/.bash_history
+        rm -f /root/.bash_history
+        history -c
+      ignore_errors: true
+
+    - name: Clear temporary files
+      shell: |
+        rm -rf /tmp/*
+        rm -rf /var/tmp/*
+      ignore_errors: true
+
+    - name: Clear machine-id for uniqueness (will regenerate on first boot)
+      shell: |
+        truncate -s 0 /etc/machine-id
+        rm -f /var/lib/dbus/machine-id
+        ln -sf /etc/machine-id /var/lib/dbus/machine-id
+
+    - name: Remove SSH host keys (will regenerate on deployment)
+      file:
+        path: "/etc/ssh/{{ item }}"
+        state: absent
+      loop:
+        - ssh_host_rsa_key
+        - ssh_host_rsa_key.pub
+        - ssh_host_ecdsa_key
+        - ssh_host_ecdsa_key.pub
+        - ssh_host_ed25519_key
+        - ssh_host_ed25519_key.pub
+
+    - name: Clear cloud-init cache if present
+      shell: cloud-init clean --logs
+      ignore_errors: true
+
+    - name: Clear network interface persistent rules
+      file:
+        path: /etc/udev/rules.d/70-persistent-net.rules
+        state: absent
+
+    - name: Clear DHCP client leases
+      shell: |
+        rm -f /var/lib/dhcp/*
+        rm -f /var/lib/dhclient/*
+      ignore_errors: true
+
+    - name: Remove user-specific cache and config that shouldn't be cloned
+      shell: |
+        rm -rf /home/*/.cache/*
+        rm -rf /home/*/.local/share/Trash/*
+        rm -rf /root/.cache/*
+      ignore_errors: true
+
+    - name: Create golden image completion marker
+      copy:
+        content: |
+          GOLDEN IMAGE TEMPLATE - READY FOR CLONING
+          ==========================================
+
+          Image prepared on: {{ ansible_date_time.iso8601 }}
+          System cleaned and prepared for deployment
+
+          IMPORTANT: This system is a template and should be:
+          1. Powered down cleanly
+          2. Imaged using Clonezilla or dd
+          3. Deployed to target hardware
+          4. Configured with unique settings via Ansible
+
+          Next steps after imaging:
+          1. Boot target machine from restored image
+          2. Run post-deployment Ansible playbook to:
+             - Set unique hostname
+             - Configure static IP
+             - Regenerate SSH host keys
+             - Regenerate machine-id
+             - Join MicroK8s cluster (if applicable)
+
+          Template includes:
+          - Ubuntu {{ ansible_distribution_release }}
+          - Docker CE + MicroK8s {{ microk8s_channel | default('1.29/stable') }}
+          - Development tools (Terraform, Node.js, Go, Python)
+          - CLI tools (kubectl, helm, docker-compose)
+          - Users: davidg, labuser (both with sudo/docker/k8s access)
+          - System optimized for Kubernetes workloads
+        dest: /etc/golden-image-ready
+        mode: '0644'
+
+    - name: Final sync to ensure all writes are completed
+      command: sync
+
+    - name: Display golden image preparation completion
+      debug:
+        msg:
+          - "========================================="
+          - "GOLDEN IMAGE PREPARATION COMPLETED!"
+          - "========================================="
+          - ""
+          - "System has been cleaned and prepared for imaging:"
+          - "  ✓ Package cache cleared"
+          - "  ✓ Log files truncated"
+          - "  ✓ Bash history cleared"
+          - "  ✓ Temporary files removed"
+          - "  ✓ Machine-ID cleared (will regenerate)"
+          - "  ✓ SSH host keys removed (will regenerate)"
+          - "  ✓ Network persistent rules cleared"
+          - "  ✓ User caches cleaned"
+          - ""
+          - "NEXT STEPS:"
+          - "1. Power down this system cleanly: sudo shutdown -h now"
+          - "2. Create image using Clonezilla or dd"
+          - "3. Deploy image to target laptops"
+          - "4. Run post-deployment Ansible playbooks"
+          - ""
+          - "Golden image marker created: /etc/golden-image-ready"
+
+    - name: Recommend shutdown
+      debug:
+        msg:
+          - "RECOMMENDATION: Shut down the system now to preserve the clean state"
+          - "Run: sudo shutdown -h now"
+          - "Then proceed with imaging using Clonezilla or dd"

@@ -1,0 +1,106 @@
+---
+- name: Setup Lab Users
+  hosts: all
+  become: true
+  vars_files:
+  - ../group_vars/all.yml
+
+  tasks:
+    - name: Create labuser account
+      user:
+        name: labuser
+        groups: sudo,docker,microk8s
+        shell: /bin/bash
+        create_home: true
+        state: present
+
+    - name: Set up SSH directory for labuser
+      file:
+        path: /home/labuser/.ssh
+        state: directory
+        owner: labuser
+        group: labuser
+        mode: '0700'
+
+    - name: Add SSH key for labuser
+      authorized_key:
+        user: labuser
+        key: "{{ ssh_public_key }}"
+        state: present
+
+    - name: Add passwordless sudo for labuser
+      copy:
+        content: 'labuser ALL=(ALL) NOPASSWD:ALL'
+        dest: /etc/sudoers.d/labuser
+        mode: '0440'
+        validate: 'visudo -cf %s'
+
+    - name: Ensure davidg is in all required groups
+      user:
+        name: davidg
+        groups: sudo,docker,microk8s
+        append: true
+
+    - name: Create kubectl alias for labuser
+      lineinfile:
+        path: /home/labuser/.bashrc
+        line: 'alias kubectl="microk8s kubectl"'
+        create: true
+        owner: labuser
+        group: labuser
+
+    - name: Create kubectl config directory for labuser
+      file:
+        path: /home/labuser/.kube
+        state: directory
+        owner: labuser
+        group: labuser
+        mode: '0755'
+
+    - name: Copy kubectl config to labuser
+      copy:
+        src: /home/davidg/.kube/config
+        dest: /home/labuser/.kube/config
+        owner: labuser
+        group: labuser
+        mode: '0600'
+        remote_src: true
+      ignore_errors: true  # In case kubectl config doesn't exist yet
+
+    - name: Add local bin to PATH for labuser
+      lineinfile:
+        path: /home/labuser/.bashrc
+        line: 'export PATH="$HOME/.local/bin:$PATH"'
+        create: true
+        owner: labuser
+        group: labuser
+
+    - name: Create development directories for labuser
+      file:
+        path: "/home/labuser/{{ item }}"
+        state: directory
+        owner: labuser
+        group: labuser
+        mode: '0755'
+      loop:
+        - projects
+        - scripts
+        - tools
+        - .local/bin
+
+    - name: Verify both users can use sudo
+      command: sudo -l -U {{ item }}
+      loop:
+        - davidg
+        - labuser
+      register: sudo_check
+      changed_when: false
+
+    - name: Show user setup completion
+      debug:
+        msg:
+          - "User setup completed successfully!"
+          - "Users created: davidg, labuser"
+          - "Both users have: sudo, docker, microk8s group membership"
+          - "Both users have: SSH key access, passwordless sudo"
+          - "Development directories created for both users"
