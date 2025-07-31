@@ -1,0 +1,141 @@
+---
+- name: Bootstrap Fresh Ubuntu Install
+  hosts: all
+  gather_facts: true
+  vars_files:
+    - ../group_vars/all.yml
+
+  tasks:
+    - name: Wait for system to be ready
+      wait_for_connection:
+        timeout: 300
+
+    - name: Gather system facts
+      setup:
+
+    - name: Check if this is a fresh install
+      stat:
+        path: /etc/ansible-configured
+      register: ansible_marker
+
+    - name: Display system information
+      debug:
+        msg:
+          - "Bootstrapping fresh Ubuntu install"
+          - "Hostname: {{ inventory_hostname }}"
+          - "Ubuntu version: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+          - "User: {{ ansible_user }}"
+          - "Fresh install: {{ not ansible_marker.stat.exists }}"
+
+    - name: Update apt cache (required for fresh installs)
+      apt:
+        update_cache: true
+        cache_valid_time: 300
+      become: true
+
+    - name: Install essential packages for Ansible management
+      apt:
+        name:
+          - python3
+          - python3-pip
+          - openssh-server
+          - sudo
+          - curl
+          - wget
+          - ca-certificates
+        state: present
+        update_cache: true
+      become: true
+
+    - name: Ensure SSH service is running and enabled
+      systemd:
+        name: ssh
+        state: started
+        enabled: true
+      become: true
+
+    - name: Ensure user is in sudo group
+      user:
+        name: "{{ ansible_user }}"
+        groups: sudo
+        append: true
+      become: true
+
+    - name: Configure passwordless sudo for user
+      copy:
+        content: "{{ ansible_user }} ALL=(ALL) NOPASSWD:ALL"
+        dest: "/etc/sudoers.d/{{ ansible_user }}"
+        mode: '0440'
+        validate: 'visudo -cf %s'
+      become: true
+
+    - name: Test passwordless sudo
+      command: sudo -n whoami
+      register: sudo_test
+      changed_when: false
+
+    - name: Verify sudo test result
+      assert:
+        that:
+          - sudo_test.stdout == "root"
+        fail_msg: "Passwordless sudo is not working correctly"
+        success_msg: "Passwordless sudo configured successfully"
+
+    - name: Basic SSH security - disable password authentication
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PasswordAuthentication'
+        line: 'PasswordAuthentication no'
+        backup: true
+      become: true
+      notify: restart ssh
+
+    - name: Basic SSH security - enable public key authentication
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PubkeyAuthentication'
+        line: 'PubkeyAuthentication yes'
+      become: true
+      notify: restart ssh
+
+    - name: Create ansible configuration marker
+      copy:
+        content: |
+          Ansible Bootstrap Completed
+          ==========================
+          Date: {{ ansible_date_time.iso8601 }}
+          User: {{ ansible_user }}
+          System: {{ ansible_distribution }} {{ ansible_distribution_version }}
+          Hostname: {{ inventory_hostname }}
+
+          Bootstrap tasks completed:
+          - SSH keys configured (via setup_ssh.sh)
+          - Passwordless sudo enabled
+          - Essential packages installed
+          - SSH service secured
+
+          System ready for additional Ansible playbooks.
+        dest: /etc/ansible-configured
+        mode: '0644'
+      become: true
+
+    - name: Display bootstrap completion
+      debug:
+        msg:
+          - "========================================="
+          - "BOOTSTRAP COMPLETED SUCCESSFULLY!"
+          - "========================================="
+          - ""
+          - "✓ SSH keys already working"
+          - "✓ Passwordless sudo configured"
+          - "✓ Essential packages installed"
+          - "✓ SSH service secured"
+          - ""
+          - "System is now ready for other playbooks!"
+
+  handlers:
+    - name: restart ssh
+      systemd:
+        name: ssh
+        state: restarted
+      become: true

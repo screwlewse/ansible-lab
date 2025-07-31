@@ -3,7 +3,7 @@
   hosts: all
   become: true
   vars_files:
-    - ../vars.yml
+    - ../group_vars/all.yml
 
   tasks:
     - name: Update apt cache

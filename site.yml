@@ -1,0 +1,159 @@
+---
+# Master site playbook - runs all configuration in correct order
+# Usage: ansible-playbook -i inventories/homelab.ini site.yml
+
+- name: "=== HOMELAB SETUP: Complete System Configuration ==="
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Display setup information
+      debug:
+        msg:
+          - "========================================="
+          - "🏠 HOMELAB COMPLETE SETUP"
+          - "========================================="
+          - ""
+          - "This will configure your system with:"
+          - "  ✓ OS updates and essential packages"
+          - "  ✓ SSH security hardening"
+          - "  ✓ Docker container runtime"
+          - "  ✓ Kubernetes (MicroK8s) platform"
+          - "  ✓ Development tools and CLI utilities"
+          - "  ✓ User accounts and permissions"
+          - "  ✓ System optimization for containers"
+          - ""
+          - "Target hosts: {{ groups['homelab'] | join(', ') }}"
+          - ""
+          - "⏱️  Total estimated time: 15-20 minutes"
+          - "🚀 Starting in 5 seconds..."
+
+    - name: Pause before starting
+      pause:
+        seconds: 5
+
+# Phase 1: OS Foundation
+- name: "Phase 1/7: 🔄 System Updates & Essential Packages"
+  import_playbook: playbooks/update_os.yml
+
+- name: "Phase 2/7: 🔐 SSH Security Configuration"
+  import_playbook: playbooks/configure_ssh.yml
+
+# Phase 2: Container Platform
+- name: "Phase 3/7: 🐳 Docker Installation"
+  import_playbook: playbooks/install_docker.yml
+
+- name: "Phase 4/7: ☸️  Kubernetes (MicroK8s) Setup"
+  import_playbook: playbooks/install_kubernetes.yml
+
+# Phase 3: Development Environment
+- name: "Phase 5/7: 🛠️  Development Tools Installation"
+  import_playbook: playbooks/install_development_tools.yml
+
+- name: "Phase 6/7: 👥 User Account Setup"
+  import_playbook: playbooks/setup_users.yml
+
+- name: "Phase 7/7: ⚙️  System Configuration & Optimization"
+  import_playbook: playbooks/configure_systems.yml
+
+# Final Summary
+- name: "=== SETUP COMPLETE: Summary and Next Steps ==="
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Gather final system state
+      setup:
+
+    - name: Check Docker status
+      command: docker --version
+      register: docker_version
+      changed_when: false
+
+    - name: Check MicroK8s status
+      command: microk8s status --wait-ready --timeout 30
+      register: microk8s_status
+      changed_when: false
+      become: true
+
+    - name: Check development tools
+      shell: "{{ item }} --version 2>/dev/null || echo 'Not found'"
+      loop:
+        - terraform
+        - node
+        - go
+        - kubectl
+        - helm
+      register: tool_versions
+      changed_when: false
+
+    - name: Display completion summary
+      debug:
+        msg:
+          - "==========================================="
+          - "🎉 HOMELAB SETUP COMPLETED SUCCESSFULLY!"
+          - "==========================================="
+          - ""
+          - "📊 System Summary:"
+          - "  Host: {{ inventory_hostname }}"
+          - "  OS: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+          - "  Kernel: {{ ansible_kernel }}"
+          - "  Memory: {{ ansible_memtotal_mb }}MB"
+          - "  Architecture: {{ ansible_architecture }}"
+          - ""
+          - "🔧 Installed Software:"
+          - "  Docker: {{ docker_version.stdout }}"
+          - "  MicroK8s: Ready"
+          - "  Users: davidg, labuser (both with sudo/docker/k8s access)"
+          - ""
+          - "🚀 Next Steps:"
+          - "  1. Log out and back in to activate group memberships"
+          - "  2. Test Docker: docker run hello-world"
+          - "  3. Test Kubernetes: kubectl get nodes"
+          - "  4. Access MicroK8s: microk8s dashboard-proxy"
+          - ""
+          - "📁 Useful Directories:"
+          - "  ~/projects - For your development projects"
+          - "  ~/scripts - For automation scripts"
+          - "  ~/tools - For additional tools"
+          - ""
+          - "🎯 Your homelab is ready for CI/CD workloads!"
+
+    - name: Display development tools summary
+      debug:
+        msg: "{{ item.item }}: {{ item.stdout | regex_replace('\\n.*', '') }}"
+      loop: "{{ tool_versions.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Create setup completion marker
+      copy:
+        content: |
+          HOMELAB SETUP COMPLETED
+          ======================
+
+          Setup completed: {{ ansible_date_time.iso8601 }}
+          Host: {{ inventory_hostname }}
+          OS: {{ ansible_distribution }} {{ ansible_distribution_version }}
+
+          Installed Components:
+          - Docker CE: {{ docker_version.stdout }}
+          - MicroK8s with DNS and storage addons
+          - Development tools: Terraform, Node.js, Go, Python
+          - CLI tools: kubectl, helm, docker-compose
+          - Users: davidg, labuser (both with full access)
+
+          System Configuration:
+          - SSH key-only authentication
+          - Passwordless sudo
+          - Container-optimized settings
+          - Development environment ready
+
+          Next steps:
+          1. Log out/in to activate group memberships
+          2. Test Docker and Kubernetes
+          3. Begin deploying CI/CD infrastructure
+
+          For cluster setup, add this node to your Kubernetes cluster
+          or configure additional homelab services.
+        dest: /etc/homelab-setup-complete
+        mode: '0644'
+      become: true
