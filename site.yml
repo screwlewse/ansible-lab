@@ -18,7 +18,7 @@
           - "  ✓ SSH security hardening"
           - "  ✓ Docker container runtime"
           - "  ✓ Kubernetes (MicroK8s) platform"
-          - "  ✓ Development tools and CLI utilities"
+          - "  ✓ Platform management tools (kubectl, helm)"
           - "  ✓ User accounts and permissions"
           - "  ✓ System optimization for containers"
           - ""
@@ -45,9 +45,9 @@
 - name: "Phase 4/7: ☸️  Kubernetes (MicroK8s) Setup"
   import_playbook: playbooks/install_kubernetes.yml
 
-# Phase 3: Development Environment
-- name: "Phase 5/7: 🛠️  Development Tools Installation"
-  import_playbook: playbooks/install_development_tools.yml
+# Phase 3: Platform Tools
+- name: "Phase 5/7: 🛠️  Platform Tools Installation"
+  import_playbook: playbooks/install_platform_tools.yml
 
 - name: "Phase 6/7: 👥 User Account Setup"
   import_playbook: playbooks/setup_users.yml
@@ -74,12 +74,9 @@
       changed_when: false
       become: true
 
-    - name: Check development tools
+    - name: Check platform tools
       shell: "{{ item }} --version 2>/dev/null || echo 'Not found'"
       loop:
-        - terraform
-        - node
-        - go
         - kubectl
         - helm
       register: tool_versions
@@ -108,16 +105,15 @@
           - "  1. Log out and back in to activate group memberships"
           - "  2. Test Docker: docker run hello-world"
           - "  3. Test Kubernetes: kubectl get nodes"
-          - "  4. Access MicroK8s: microk8s dashboard-proxy"
+          - "  4. Deploy containerized development environments"
           - ""
-          - "📁 Useful Directories:"
-          - "  ~/projects - For your development projects"
-          - "  ~/scripts - For automation scripts"
-          - "  ~/tools - For additional tools"
+          - "📁 Platform Directories:"
+          - "  ~/manifests - Kubernetes manifests"
+          - "  ~/charts - Helm charts"
           - ""
-          - "🎯 Your homelab is ready for CI/CD workloads!"
+          - "🎯 Your platform is ready to host containerized workloads!"
 
-    - name: Display development tools summary
+    - name: Display platform tools summary
       debug:
         msg: "{{ item.item }}: {{ item.stdout | regex_replace('\\n.*', '') }}"
       loop: "{{ tool_versions.results }}"
@@ -137,8 +133,8 @@
           Installed Components:
           - Docker CE: {{ docker_version.stdout }}
           - MicroK8s with DNS and storage addons
-          - Development tools: Terraform, Node.js, Go, Python
-          - CLI tools: kubectl, helm, docker-compose
+          - Platform tools: kubectl, helm
+          - Essential utilities for container management
           - Users: davidg, labuser (both with full access)
 
           System Configuration:
@@ -150,7 +146,7 @@
           Next steps:
           1. Log out/in to activate group memberships
           2. Test Docker and Kubernetes
-          3. Begin deploying CI/CD infrastructure
+          3. Deploy containerized development environments
 
           For cluster setup, add this node to your Kubernetes cluster
           or configure additional homelab services.

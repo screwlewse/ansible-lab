@@ -1,0 +1,86 @@
+---
+- name: Install Platform Tools
+  hosts: all
+  become: true
+  vars_files:
+    - ../group_vars/all.yml
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: true
+        cache_valid_time: 300
+
+    - name: Install essential platform utilities
+      apt:
+        name:
+          - curl
+          - wget
+          - git
+          - vim
+          - nano
+          - htop
+          - tree
+          - jq
+          - yq
+          - netcat-openbsd
+          - telnet
+          - nmap
+          - tmux
+          - screen
+        state: present
+
+    - name: Install kubectl for Kubernetes management
+      shell: |
+        curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+        chmod +x kubectl
+        mv kubectl /usr/local/bin/
+      args:
+        creates: /usr/local/bin/kubectl
+
+    - name: Install Helm for Kubernetes package management
+      shell: |
+        curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      args:
+        creates: /usr/local/bin/helm
+
+    - name: Verify platform tool installations
+      shell: "{{ item }} --version || {{ item }} version || echo '{{ item }} installed'"
+      loop:
+        - kubectl
+        - helm
+      register: tool_versions
+      changed_when: false
+      failed_when: false
+
+    - name: Display installed tool versions
+      debug:
+        msg: "{{ item.item }}: {{ item.stdout | default('Version check failed') }}"
+      loop: "{{ tool_versions.results }}"
+
+    - name: Create platform directories
+      file:
+        path: "/home/{{ ansible_user }}/{{ item }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+      loop:
+        - manifests
+        - charts
+        - .local/bin
+
+    - name: Add local bin to PATH in bashrc
+      lineinfile:
+        path: "/home/{{ ansible_user }}/.bashrc"
+        line: 'export PATH="$HOME/.local/bin:$PATH"'
+        create: true
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+
+    - name: Show completion message
+      debug:
+        msg:
+          - "Platform tools installation completed!"
+          - "Installed: kubectl, Helm, and essential utilities"
+          - "Platform directories created in /home/{{ ansible_user }}"

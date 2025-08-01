@@ -1,0 +1,16 @@
+apiVersion: v2
+name: devenv
+description: A Helm chart for deploying the unified development environment
+type: application
+version: 0.1.0
+appVersion: "1.0"
+keywords:
+  - development
+  - nodejs
+  - deno
+  - go
+  - python
+home: https://github.com/yourusername/ansible-lab
+maintainers:
+  - name: davidg
+    email: your-email@example.com

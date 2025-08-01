@@ -12,12 +12,15 @@
         state: present
         update_cache: true
 
-    - name: Install MicroK8s snap
-      snap:
-        name: microk8s
-        classic: true
-        channel: "1.29/stable"
-        state: present
+    - name: Check if MicroK8s is already installed
+      command: snap list microk8s
+      register: microk8s_check
+      failed_when: false
+      changed_when: false
+
+    - name: Install MicroK8s snap using command module
+      command: snap install microk8s --classic --channel=1.29/stable
+      when: microk8s_check.rc != 0
 
     - name: Add user to microk8s group
       user:

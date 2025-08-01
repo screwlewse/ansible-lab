@@ -54,14 +54,15 @@ if [ $? -eq 0 ]; then
     echo ""
     echo "Testing passwordless connection..."
 
-    # Test the connection
-    if ssh -o BatchMode=yes -o ConnectTimeout=5 davidg@$TARGET_IP 'echo "SSH key authentication working!"' 2>/dev/null; then
-        echo "✅ Passwordless SSH is working!"
+    # Test the connection (allow passphrase prompt)
+    echo "Testing SSH connection (you may be prompted for your SSH key passphrase)..."
+    if ssh -o ConnectTimeout=5 davidg@$TARGET_IP 'echo "SSH connection successful!"'; then
+        echo "✅ SSH connection is working!"
         echo ""
         echo "🚀 Now run the bootstrap playbook:"
         echo "   ./bootstrap.sh"
     else
-        echo "❌ SSH key test failed. Please check the setup."
+        echo "❌ SSH connection test failed. Please check the setup."
         exit 1
     fi
 else

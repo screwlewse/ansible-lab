@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  devenv:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: homelab/devenv:latest
+    container_name: devenv
+    hostname: devenv
+    volumes:
+      - workspace:/workspace
+      - ~/.ssh:/home/developer/.ssh:ro
+      - ~/.gitconfig:/home/developer/.gitconfig:ro
+    environment:
+      - TERM=xterm-256color
+    ports:
+      - "3000:3000"  # Node.js apps
+      - "5000:5000"  # Python Flask
+      - "8000:8000"  # Python Django / Deno
+      - "8080:8080"  # Go apps
+    stdin_open: true
+    tty: true
+    networks:
+      - devnet
+
+volumes:
+  workspace:
+    name: devenv-workspace
+
+networks:
+  devnet:
+    name: development-network

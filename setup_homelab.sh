@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Complete homelab setup script
-# Runs the full site.yml playbook to configure everything
+# Complete container platform setup script
+# Runs the full site.yml playbook to configure a minimal Kubernetes platform
 
 set -e
 
@@ -39,7 +39,9 @@ echo ""
 
 # Test connectivity
 echo "🔐 Testing connectivity..."
-if ! ansible all -i inventories/homelab.ini -m ping >/dev/null 2>&1; then
+echo "   (You may be prompted for your SSH key passphrase)"
+if ! ansible all -i inventories/homelab.ini -m ping; then
+    echo ""
     echo "❌ Error: Cannot connect to target systems"
     echo ""
     echo "Please ensure:"
@@ -58,8 +60,7 @@ echo "   • System updates and essential packages"
 echo "   • SSH security hardening"
 echo "   • Docker container runtime"
 echo "   • Kubernetes (MicroK8s) platform"
-echo "   • Development tools (Terraform, Node.js, Go, Python)"
-echo "   • CLI tools (kubectl, helm, docker-compose)"
+echo "   • Platform management tools (kubectl, helm)"
 echo "   • User accounts (davidg, labuser)"
 echo "   • System optimizations for containers"
 echo ""
@@ -96,7 +97,7 @@ if [ $? -eq 0 ]; then
     echo ""
     echo "⏱️  Total time: ${DURATION_MIN}m ${DURATION_SEC}s"
     echo ""
-    echo "🚀 Your homelab is ready! Key next steps:"
+    echo "🚀 Your container platform is ready! Key next steps:"
     echo ""
     echo "1. 🔄 Log out and back in to activate group memberships:"
     echo "   logout && ssh davidg@$TARGET_IP"
@@ -109,11 +110,11 @@ if [ $? -eq 0 ]; then
     echo "3. 🎛️  Optional - Access Kubernetes dashboard:"
     echo "   microk8s dashboard-proxy"
     echo ""
-    echo "4. 📁 Start developing in these directories:"
-    echo "   ~/projects/"
-    echo "   ~/scripts/"
+    echo "4. 📁 Platform directories ready:"
+    echo "   ~/manifests/ - Kubernetes manifests"
+    echo "   ~/charts/ - Helm charts"
     echo ""
-    echo "🏠 Your CI/CD homelab infrastructure is ready!"
+    echo "🏠 Your container platform is ready for workloads!"
 else
     echo ""
     echo "❌ Setup failed. Check the output above for errors."
