@@ -2,12 +2,14 @@
 
 # Enterprise Platform Setup - Advanced Components
 # Run this AFTER setup_homelab.sh completes successfully
+# Supports custom inventory files for multi-node setups
 
 set -e
 
 echo "========================================="
 echo "🏢 Enterprise Platform Setup"
 echo "========================================="
+echo "Using inventory: $INVENTORY_FILE"
 echo ""
 
 # Check prerequisites
@@ -17,16 +19,58 @@ if [ ! -f "site.yml" ]; then
     exit 1
 fi
 
-if [ ! -f "inventories/homelab.ini" ]; then
-    echo "❌ Error: inventories/homelab.ini not found"
+# Parse command line arguments
+INVENTORY_FILE="inventories/homelab.ini"
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -i|--inventory)
+            INVENTORY_FILE="$2"
+            shift 2
+            ;;
+        -h|--help)
+            echo "Usage: $0 [-i|--inventory INVENTORY_FILE]"
+            echo "  -i, --inventory: Specify inventory file (default: inventories/homelab.ini)"
+            echo "  -h, --help: Show this help message"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Use -h or --help for usage information"
+            exit 1
+            ;;
+    esac
+done
+
+if [ ! -f "$INVENTORY_FILE" ]; then
+    echo "❌ Error: $INVENTORY_FILE not found"
     exit 1
 fi
 
 # Check if basic setup is complete
-TARGET_IP=$(grep -E "^[0-9]" inventories/homelab.ini | awk '{print $1}' | head -1)
+TARGET_IPS=()
+while IFS= read -r line; do
+    # Skip comments and empty lines
+    [[ $line =~ ^[[:space:]]*# ]] && continue
+    [[ -z "$(echo "$line" | tr -d '[:space:]')" ]] && continue
+    # Skip section headers
+    [[ $line =~ ^\[.*\]$ ]] && continue
+    # Extract IP addresses (handle both IP and hostname formats)
+    if [[ $line =~ ansible_host=([0-9.]+) ]]; then
+        TARGET_IPS+=("${BASH_REMATCH[1]}")
+    elif [[ $line =~ ^([0-9.]+) ]]; then
+        TARGET_IPS+=("${BASH_REMATCH[1]}")
+    fi
+done < "$INVENTORY_FILE"
+
+if [ ${#TARGET_IPS[@]} -eq 0 ]; then
+    echo "❌ Error: Could not find any target IPs in $INVENTORY_FILE"
+    exit 1
+fi
+
+TARGET_IP="${TARGET_IPS[0]}"  # Use first IP for connection test
 
 echo "🔍 Verifying base platform readiness..."
-if ! ansible all -i inventories/homelab.ini -m shell -a "kubectl get nodes" >/dev/null 2>&1; then
+if ! ansible all -i "$INVENTORY_FILE" -m shell -a "kubectl get nodes" >/dev/null 2>&1; then
     echo "❌ Error: Base Kubernetes platform not ready"
     echo ""
     echo "Please run the base setup first:"
@@ -90,29 +134,29 @@ START_TIME=$(date +%s)
 case $OPTION in
     1)
         echo "🔄 Installing GitOps Platform (ArgoCD)..."
-        ansible-playbook -i inventories/homelab.ini playbooks/install_argocd_gitops.yml
+        ansible-playbook -i "$INVENTORY_FILE" playbooks/install_argocd_gitops.yml
         ;;
     2)
         echo "📊 Installing Monitoring Stack..."
-        ansible-playbook -i inventories/homelab.ini playbooks/install_monitoring_stack.yml
+        ansible-playbook -i "$INVENTORY_FILE" playbooks/install_monitoring_stack.yml
         ;;
     3)
         echo "🌐 Installing Service Mesh..."
-        ansible-playbook -i inventories/homelab.ini playbooks/install_linkerd_service_mesh.yml
+        ansible-playbook -i "$INVENTORY_FILE" playbooks/install_linkerd_service_mesh.yml
         ;;
     4)
         echo "🚀 Installing All Enterprise Components..."
         echo ""
         echo "Phase 1: GitOps Platform"
-        ansible-playbook -i inventories/homelab.ini playbooks/install_argocd_gitops.yml
+        ansible-playbook -i "$INVENTORY_FILE" playbooks/install_argocd_gitops.yml
         
         echo ""
         echo "Phase 2: Monitoring Stack"
-        ansible-playbook -i inventories/homelab.ini playbooks/install_monitoring_stack.yml
+        ansible-playbook -i "$INVENTORY_FILE" playbooks/install_monitoring_stack.yml
         
         echo ""
         echo "Phase 3: Service Mesh"
-        ansible-playbook -i inventories/homelab.ini playbooks/install_linkerd_service_mesh.yml
+        ansible-playbook -i "$INVENTORY_FILE" playbooks/install_linkerd_service_mesh.yml
         
         echo ""
         echo "Phase 4: Additional components can be deployed via ArgoCD"

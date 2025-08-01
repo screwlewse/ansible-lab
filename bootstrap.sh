@@ -2,17 +2,41 @@
 
 # Bootstrap script for fresh Ubuntu installs
 # NOTE: Run setup_ssh.sh FIRST to copy SSH keys
+# Supports custom inventory files for multi-node setups
 
 set -e
 
 echo "========================================="
-echo "Ansible Fresh Install Bootstrap"
+echo "Ansible Cluster Install Bootstrap"
 echo "========================================="
+echo "Using inventory: $INVENTORY_FILE"
 echo ""
 
+# Parse command line arguments
+INVENTORY_FILE="inventories/homelab.ini"
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -i|--inventory)
+            INVENTORY_FILE="$2"
+            shift 2
+            ;;
+        -h|--help)
+            echo "Usage: $0 [-i|--inventory INVENTORY_FILE]"
+            echo "  -i, --inventory: Specify inventory file (default: inventories/homelab.ini)"
+            echo "  -h, --help: Show this help message"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Use -h or --help for usage information"
+            exit 1
+            ;;
+    esac
+done
+
 # Check if inventory file exists
-if [ ! -f "inventories/homelab.ini" ]; then
-    echo "❌ Error: inventories/homelab.ini not found"
+if [ ! -f "$INVENTORY_FILE" ]; then
+    echo "❌ Error: $INVENTORY_FILE not found"
     echo "Please ensure you're running this from the correct directory"
     exit 1
 fi
@@ -29,8 +53,28 @@ if [ ! -f "group_vars/all.yml" ]; then
     exit 1
 fi
 
-# Get target IP for connection test
-TARGET_IP=$(grep -E "^[0-9]" inventories/homelab.ini | awk '{print $1}' | head -1)
+# Get target IPs for connection test
+TARGET_IPS=()
+while IFS= read -r line; do
+    # Skip comments and empty lines
+    [[ $line =~ ^[[:space:]]*# ]] && continue
+    [[ -z "$(echo "$line" | tr -d '[:space:]')" ]] && continue
+    # Skip section headers
+    [[ $line =~ ^\[.*\]$ ]] && continue
+    # Extract IP addresses (handle both IP and hostname formats)
+    if [[ $line =~ ansible_host=([0-9.]+) ]]; then
+        TARGET_IPS+=("${BASH_REMATCH[1]}")
+    elif [[ $line =~ ^([0-9.]+) ]]; then
+        TARGET_IPS+=("${BASH_REMATCH[1]}")
+    fi
+done < "$INVENTORY_FILE"
+
+if [ ${#TARGET_IPS[@]} -eq 0 ]; then
+    echo "❌ Error: Could not find any target IPs in $INVENTORY_FILE"
+    exit 1
+fi
+
+TARGET_IP="${TARGET_IPS[0]}"  # Use first IP for connection test
 
 echo "📋 Pre-flight checks passed"
 echo ""
@@ -72,7 +116,7 @@ echo ""
 
 # Run the bootstrap playbook with sudo password prompting
 ansible-playbook \
-    -i inventories/homelab.ini \
+    -i "$INVENTORY_FILE" \
     playbooks/bootstrap_fresh_install.yml \
     --ask-become-pass \
     -v
@@ -87,7 +131,11 @@ if [ $? -eq 0 ]; then
     echo "Your system is now ready for the complete setup."
     echo ""
     echo "🚀 Next step:"
-    echo "   ./setup_homelab.sh"
+    if [ "$INVENTORY_FILE" != "inventories/homelab.ini" ]; then
+        echo "   ./setup_homelab.sh -i $INVENTORY_FILE"
+    else
+        echo "   ./setup_homelab.sh"
+    fi
     echo ""
     echo "This will run the complete platform setup (15-20 minutes)"
     echo "All future playbook runs will be passwordless! 🎉"

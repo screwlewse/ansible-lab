@@ -1,0 +1,46 @@
+# Edge Computing k3s Cluster Configuration
+# Optimized for edge computing with minimal resources
+
+[servers]
+# Single control plane for edge deployment
+edge-master ansible_host=192.168.100.10 ansible_user=pi k3s_node_role=server
+
+[agents]
+# Edge worker nodes (can be Raspberry Pi, Intel NUCs, etc.)
+edge-worker-01 ansible_host=192.168.100.11 ansible_user=pi k3s_node_role=agent
+edge-worker-02 ansible_host=192.168.100.12 ansible_user=pi k3s_node_role=agent
+edge-sensor-01 ansible_host=192.168.100.13 ansible_user=pi k3s_node_role=agent
+
+# Group aliases for backward compatibility
+[homelab:children]
+servers
+agents
+
+# All nodes (servers + agents)
+[all:children]
+servers
+agents
+
+# Edge-specific configuration
+[all:vars]
+# Lightweight k3s version
+k3s_version=v1.29.1+k3s1
+
+# Edge cluster token
+k3s_token=edge-cluster-secure-token
+
+# Resource-constrained settings
+k3s_server_args="--disable=traefik --disable=servicelb --disable=metrics-server --write-kubeconfig-mode=644 --kube-proxy-arg=proxy-mode=iptables"
+k3s_agent_args="--kube-proxy-arg=proxy-mode=iptables"
+
+# Network configuration for edge
+k3s_cluster_cidr=10.42.0.0/16
+k3s_service_cidr=10.43.0.0/16
+
+# Node taints for specialized workloads
+[servers:vars]
+k3s_node_taints="node-role.kubernetes.io/control-plane:NoSchedule"
+
+[agents:vars]
+# Example: Taint sensor nodes for IoT workloads only
+# k3s_node_taints="workload=sensor:NoSchedule"

@@ -2,12 +2,14 @@
 
 # Complete container platform setup script
 # Runs the full site.yml playbook to configure a minimal Kubernetes platform
+# Supports custom inventory files for multi-node setups
 
 set -e
 
 echo "========================================="
 echo "🏠 Complete Homelab Setup"
 echo "========================================="
+echo "Using inventory: $INVENTORY_FILE"
 echo ""
 
 # Check prerequisites
@@ -17,8 +19,30 @@ if [ ! -f "site.yml" ]; then
     exit 1
 fi
 
-if [ ! -f "inventories/homelab.ini" ]; then
-    echo "❌ Error: inventories/homelab.ini not found"
+# Parse command line arguments
+INVENTORY_FILE="inventories/homelab.ini"
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -i|--inventory)
+            INVENTORY_FILE="$2"
+            shift 2
+            ;;
+        -h|--help)
+            echo "Usage: $0 [-i|--inventory INVENTORY_FILE]"
+            echo "  -i, --inventory: Specify inventory file (default: inventories/homelab.ini)"
+            echo "  -h, --help: Show this help message"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Use -h or --help for usage information"
+            exit 1
+            ;;
+    esac
+done
+
+if [ ! -f "$INVENTORY_FILE" ]; then
+    echo "❌ Error: $INVENTORY_FILE not found"
     exit 1
 fi
 
@@ -27,9 +51,29 @@ if [ ! -f "group_vars/all.yml" ]; then
     exit 1
 fi
 
-# Get target info
-TARGET_IP=$(grep -E "^[0-9]" inventories/homelab.ini | awk '{print $1}' | head -1)
-TARGET_COUNT=$(grep -E "^[0-9]" inventories/homelab.ini | wc -l)
+# Get target info from inventory
+TARGET_IPS=()
+while IFS= read -r line; do
+    # Skip comments and empty lines
+    [[ $line =~ ^[[:space:]]*# ]] && continue
+    [[ -z "$(echo "$line" | tr -d '[:space:]')" ]] && continue
+    # Skip section headers
+    [[ $line =~ ^\[.*\]$ ]] && continue
+    # Extract IP addresses (handle both IP and hostname formats)
+    if [[ $line =~ ansible_host=([0-9.]+) ]]; then
+        TARGET_IPS+=("${BASH_REMATCH[1]}")
+    elif [[ $line =~ ^([0-9.]+) ]]; then
+        TARGET_IPS+=("${BASH_REMATCH[1]}")
+    fi
+done < "$INVENTORY_FILE"
+
+if [ ${#TARGET_IPS[@]} -eq 0 ]; then
+    echo "❌ Error: Could not find any target IPs in $INVENTORY_FILE"
+    exit 1
+fi
+
+TARGET_IP="${TARGET_IPS[0]}"  # Primary node for display
+TARGET_COUNT=${#TARGET_IPS[@]}
 
 echo "📋 Pre-flight checks passed"
 echo ""
@@ -40,7 +84,7 @@ echo ""
 # Test connectivity
 echo "🔐 Testing connectivity..."
 echo "   (You may be prompted for your SSH key passphrase)"
-if ! ansible all -i inventories/homelab.ini -m ping; then
+if ! ansible all -i "$INVENTORY_FILE" -m ping; then
     echo ""
     echo "❌ Error: Cannot connect to target systems"
     echo ""
@@ -82,7 +126,7 @@ echo ""
 START_TIME=$(date +%s)
 
 # Run the master playbook
-ansible-playbook -i inventories/homelab.ini site.yml
+ansible-playbook -i "$INVENTORY_FILE" site.yml
 
 # Calculate duration
 END_TIME=$(date +%s)
@@ -116,6 +160,13 @@ if [ $? -eq 0 ]; then
     echo "   ~/charts/ - Helm charts"
     echo ""
     echo "🏠 Your container platform is ready for workloads!"
+    echo ""
+    echo "🚀 For enterprise components (GitOps, Monitoring, Service Mesh):"
+    if [ "$INVENTORY_FILE" != "inventories/homelab.ini" ]; then
+        echo "   ./setup_enterprise.sh -i $INVENTORY_FILE"
+    else
+        echo "   ./setup_enterprise.sh"
+    fi
 else
     echo ""
     echo "❌ Setup failed. Check the output above for errors."
