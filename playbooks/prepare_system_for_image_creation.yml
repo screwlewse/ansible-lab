@@ -104,11 +104,11 @@
              - Configure static IP
              - Regenerate SSH host keys
              - Regenerate machine-id
-             - Join MicroK8s cluster (if applicable)
+             - Join k3s cluster (if applicable)
 
           Template includes:
           - Ubuntu {{ ansible_distribution_release }}
-          - Docker CE + MicroK8s {{ microk8s_channel | default('1.29/stable') }}
+          - Docker CE + k3s {{ k3s_channel | default('1.29/stable') }}
           - Development tools (Terraform, Node.js, Go, Python)
           - CLI tools (kubectl, helm, docker-compose)
           - Users: davidg, labuser (both with sudo/docker/k8s access)

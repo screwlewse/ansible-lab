@@ -9,7 +9,7 @@
     - name: Create labuser account
       user:
         name: labuser
-        groups: sudo,docker,microk8s
+        groups: sudo,docker
         shell: /bin/bash
         create_home: true
         state: present
@@ -38,13 +38,13 @@
     - name: Ensure davidg is in all required groups
       user:
         name: davidg
-        groups: sudo,docker,microk8s
+        groups: sudo,docker
         append: true
 
     - name: Create kubectl alias for labuser
       lineinfile:
         path: /home/labuser/.bashrc
-        line: 'alias kubectl="microk8s kubectl"'
+        line: 'alias k=kubectl'
         create: true
         owner: labuser
         group: labuser
@@ -101,6 +101,6 @@
         msg:
           - "User setup completed successfully!"
           - "Users created: davidg, labuser"
-          - "Both users have: sudo, docker, microk8s group membership"
+          - "Both users have: sudo, docker group membership"
           - "Both users have: SSH key access, passwordless sudo"
           - "Development directories created for both users"

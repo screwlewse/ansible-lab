@@ -17,7 +17,7 @@
           - "  ✓ OS updates and essential packages"
           - "  ✓ SSH security hardening"
           - "  ✓ Docker container runtime"
-          - "  ✓ Kubernetes (MicroK8s) platform"
+          - "  ✓ Kubernetes (k3s) platform"
           - "  ✓ Platform management tools (kubectl, helm)"
           - "  ✓ User accounts and permissions"
           - "  ✓ System optimization for containers"
@@ -42,7 +42,7 @@
 - name: "Phase 3/7: 🐳 Docker Installation"
   import_playbook: playbooks/install_docker.yml
 
-- name: "Phase 4/7: ☸️  Kubernetes (MicroK8s) Setup"
+- name: "Phase 4/7: ☸️  Kubernetes (k3s) Setup"
   import_playbook: playbooks/install_kubernetes.yml
 
 # Phase 3: Platform Tools
@@ -68,9 +68,9 @@
       register: docker_version
       changed_when: false
 
-    - name: Check MicroK8s status
-      command: microk8s status --wait-ready --timeout 30
-      register: microk8s_status
+    - name: Check k3s status
+      command: k3s kubectl get nodes
+      register: k3s_status
       changed_when: false
       become: true
 
@@ -98,7 +98,7 @@
           - ""
           - "🔧 Installed Software:"
           - "  Docker: {{ docker_version.stdout }}"
-          - "  MicroK8s: Ready"
+          - "  k3s: Ready"
           - "  Users: davidg, labuser (both with sudo/docker/k8s access)"
           - ""
           - "🚀 Next Steps:"
@@ -132,7 +132,7 @@
 
           Installed Components:
           - Docker CE: {{ docker_version.stdout }}
-          - MicroK8s with DNS and storage addons
+          - k3s with integrated DNS and storage
           - Platform tools: kubectl, helm
           - Essential utilities for container management
           - Users: davidg, labuser (both with full access)

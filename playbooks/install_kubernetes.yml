@@ -1,55 +1,64 @@
 ---
-- name: Install MicroK8s
+- name: Install k3s (Lightweight Kubernetes)
   hosts: all
   become: true
   vars_files:
     - ../group_vars/all.yml
 
+  vars:
+    k3s_version: "v1.29.1+k3s1"  # Stable version for consistency
+    k3s_token: "ansible-lab-cluster"
+    k3s_server_url: ""  # Set this in inventory for multi-node clusters
+
   tasks:
-    - name: Install snapd (if not already installed)
+    - name: Install required packages for k3s
       apt:
-        name: snapd
+        name:
+          - curl
+          - iptables
+          - open-iscsi
+          - nfs-common
         state: present
         update_cache: true
 
-    - name: Check if MicroK8s is already installed
-      command: snap list microk8s
-      register: microk8s_check
-      failed_when: false
-      changed_when: false
+    - name: Check if k3s is already installed
+      stat:
+        path: /usr/local/bin/k3s
+      register: k3s_binary
 
-    - name: Install MicroK8s snap using command module
-      command: snap install microk8s --classic --channel=1.29/stable
-      when: microk8s_check.rc != 0
+    - name: Download and install k3s server (single node)
+      shell: |
+        curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} K3S_TOKEN={{ k3s_token }} sh -s - server --cluster-init
+      when: 
+        - not k3s_binary.stat.exists
+        - inventory_hostname == groups['all'][0]  # First node becomes server
+      environment:
+        INSTALL_K3S_EXEC: "--disable=traefik --disable=servicelb --write-kubeconfig-mode=644"
 
-    - name: Add user to microk8s group
-      user:
-        name: "{{ ansible_user }}"
-        groups: microk8s
-        append: true
+    - name: Download and install k3s server (additional servers)
+      shell: |
+        curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} K3S_TOKEN={{ k3s_token }} sh -s - server --server https://{{ hostvars[groups['all'][0]]['ansible_default_ipv4']['address'] }}:6443
+      when: 
+        - not k3s_binary.stat.exists
+        - inventory_hostname != groups['all'][0]
+        - inventory_hostname in groups.get('servers', [])
+      environment:
+        INSTALL_K3S_EXEC: "--disable=traefik --disable=servicelb --write-kubeconfig-mode=644"
 
-    - name: Wait for MicroK8s to be ready
-      command: microk8s status --wait-ready
-      register: microk8s_status
-      changed_when: false
-      retries: 3
-      delay: 10
+    - name: Download and install k3s agent (worker nodes)
+      shell: |
+        curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} K3S_TOKEN={{ k3s_token }} K3S_URL=https://{{ hostvars[groups['all'][0]]['ansible_default_ipv4']['address'] }}:6443 sh -
+      when: 
+        - not k3s_binary.stat.exists
+        - inventory_hostname in groups.get('agents', [])
 
-    - name: Enable basic MicroK8s addons
-      command: "microk8s enable {{ item }}"
-      loop:
-        - dns
-        - storage
-      register: addon_result
-      changed_when: "'already enabled' not in addon_result.stdout"
-
-    - name: Create kubectl alias in bashrc
-      lineinfile:
-        path: "/home/{{ ansible_user }}/.bashrc"
-        line: 'alias kubectl="microk8s kubectl"'
-        create: true
-        owner: "{{ ansible_user }}"
-        group: "{{ ansible_user }}"
+    - name: Wait for k3s to be ready
+      wait_for:
+        port: 6443
+        host: "{{ ansible_default_ipv4.address }}"
+        delay: 15
+        timeout: 300
+      when: inventory_hostname in groups.get('servers', groups['all'])
 
     - name: Create kubectl config directory
       file:
@@ -59,34 +68,46 @@
         group: "{{ ansible_user }}"
         mode: '0755'
 
-    - name: Export kubeconfig for kubectl
-      shell: microk8s config > /home/{{ ansible_user }}/.kube/config
-      args:
-        creates: "/home/{{ ansible_user }}/.kube/config"
-
-    - name: Set ownership of kubeconfig
-      file:
-        path: "/home/{{ ansible_user }}/.kube/config"
+    - name: Copy k3s config to user's kubeconfig
+      copy:
+        src: /etc/rancher/k3s/k3s.yaml
+        dest: "/home/{{ ansible_user }}/.kube/config"
         owner: "{{ ansible_user }}"
         group: "{{ ansible_user }}"
         mode: '0600'
+        remote_src: true
+      when: inventory_hostname in groups.get('servers', groups['all'])
 
-    - name: Fix .kube directory ownership
-      file:
-        path: "/home/{{ ansible_user }}/.kube"
+    - name: Replace localhost with actual IP in kubeconfig
+      replace:
+        path: "/home/{{ ansible_user }}/.kube/config"
+        regexp: '127\.0\.0\.1'
+        replace: "{{ ansible_default_ipv4.address }}"
+      when: inventory_hostname in groups.get('servers', groups['all'])
+
+    - name: Add kubectl completion to bashrc
+      lineinfile:
+        path: "/home/{{ ansible_user }}/.bashrc"
+        line: "{{ item }}"
+        create: true
         owner: "{{ ansible_user }}"
         group: "{{ ansible_user }}"
-        recurse: true
+      loop:
+        - 'export KUBECONFIG=~/.kube/config'
+        - 'source <(kubectl completion bash)'
+        - 'alias k=kubectl'
+        - 'complete -F __start_kubectl k'
 
-    - name: Verify MicroK8s installation with sudo (since group change needs session restart)
-      command: sudo microk8s kubectl get nodes
-      register: k8s_nodes
+    - name: Verify k3s installation
+      shell: k3s kubectl get nodes
+      register: k3s_nodes
       changed_when: false
-      become_user: "{{ ansible_user }}"
+      when: inventory_hostname in groups.get('servers', groups['all'])
 
-    - name: Show MicroK8s status
+    - name: Display k3s cluster status
       debug:
         msg:
-          - "MicroK8s installation completed"
-          - "Note: You may need to log out and back in for group membership to take effect"
-          - "Nodes: {{ k8s_nodes.stdout_lines }}"
+          - "k3s installation completed"
+          - "Cluster nodes: {{ k3s_nodes.stdout_lines | default(['Status check skipped on agent nodes']) }}"
+          - "Note: Traefik and ServiceLB are disabled for custom ingress/load balancer setup"
+          - "Log out and back in for bash completion to take effect"

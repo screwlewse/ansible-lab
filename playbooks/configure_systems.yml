@@ -97,7 +97,7 @@
 
           Installed Software:
           - Docker CE
-          - MicroK8s {{ microk8s_channel | default('1.29/stable') }}
+          - k3s {{ k3s_channel | default('1.29/stable') }}
           - Development Tools (Terraform, Node.js, Go, Python)
           - CLI Tools (kubectl, helm, docker-compose)
 
@@ -112,7 +112,7 @@
           Users:
           - davidg (primary user)
           - labuser (secondary user)
-          Both with sudo, docker, microk8s access
+          Both with sudo, docker, k3s access
         dest: /etc/system-info.txt
         mode: '0644'
 
