@@ -202,7 +202,7 @@ if [ $? -eq 0 ]; then
     echo "🎛️  Access Your Enterprise Platform:"
     echo ""
     
-    if [[ $OPTION == "1" || $OPTION == "4" ]]; then
+    if [[ $OPTION == "1" || $OPTION == "6" ]]; then
         echo "📋 ArgoCD GitOps Dashboard:"
         echo "   kubectl port-forward -n argocd svc/argocd-server 8080:80"
         echo "   Visit: http://localhost:8080"
@@ -211,7 +211,7 @@ if [ $? -eq 0 ]; then
         echo ""
     fi
     
-    if [[ $OPTION == "2" || $OPTION == "4" ]]; then
+    if [[ $OPTION == "2" || $OPTION == "6" ]]; then
         echo "📊 Grafana Monitoring Dashboard:"
         echo "   kubectl port-forward -n monitoring svc/grafana 3000:80"
         echo "   Visit: http://localhost:3000"
@@ -224,7 +224,7 @@ if [ $? -eq 0 ]; then
         echo ""
     fi
     
-    if [[ $OPTION == "3" || $OPTION == "5" ]]; then
+    if [[ $OPTION == "3" || $OPTION == "6" ]]; then
         echo "🌐 Linkerd Service Mesh Dashboard:"
         echo "   linkerd viz dashboard &"
         echo "   OR"
@@ -233,7 +233,7 @@ if [ $? -eq 0 ]; then
         echo ""
     fi
     
-    if [[ $OPTION == "4" || $OPTION == "5" ]]; then
+    if [[ $OPTION == "4" || $OPTION == "6" ]]; then
         echo "🔒 Security Policy Management:"
         echo "   ~/apply-security-policies.sh  # Apply network policies"
         echo "   ~/manage-mtls.sh              # Configure mTLS automation"
@@ -242,6 +242,18 @@ if [ $? -eq 0 ]; then
         echo "🔍 Security Verification:"
         echo "   kubectl get networkpolicies -A"
         echo "   linkerd viz stat deployments -A"
+        echo ""
+    fi
+    
+    if [[ $OPTION == "5" || $OPTION == "6" ]]; then
+        echo "🏛️ Cluster Management Tools:"
+        echo "   ~/cluster-management.sh       # Interactive tool launcher"
+        echo "   ~/install-k9s.sh              # Install K9s terminal dashboard"
+        echo "   ~/lens-installation-guide.sh  # Lens desktop setup guide"
+        echo ""
+        echo "🏛️ Dashboard Access:"
+        echo "   Skooner: kubectl port-forward -n cluster-management svc/skooner 8080:80"
+        echo "   Kubevious: kubectl port-forward -n cluster-management svc/kubevious-frontend-service 8081:3000"
         echo ""
     fi
     
