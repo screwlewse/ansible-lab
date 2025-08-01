@@ -1,0 +1,385 @@
+---
+- name: Install Grafana k8s Monitoring Stack
+  hosts: all
+  become: true
+  vars_files:
+    - ../group_vars/all.yml
+
+  vars:
+    monitoring_namespace: "monitoring"
+    grafana_admin_password: "homelab-admin"  # Change in production!
+
+  tasks:
+    - name: Create monitoring namespace
+      kubernetes.core.k8s:
+        name: "{{ monitoring_namespace }}"
+        api_version: v1
+        kind: Namespace
+        state: present
+        kubeconfig: "/home/{{ ansible_user }}/.kube/config"
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Add Grafana Helm repository
+      kubernetes.core.helm_repository:
+        name: grafana
+        repo_url: https://grafana.github.io/helm-charts
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Add Prometheus Helm repository
+      kubernetes.core.helm_repository:
+        name: prometheus-community
+        repo_url: https://prometheus-community.github.io/helm-charts
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Update Helm repositories
+      kubernetes.core.helm:
+        name: dummy
+        chart_ref: grafana/k8s-monitoring
+        release_namespace: "{{ monitoring_namespace }}"
+        state: absent
+        update_repo_cache: true
+      become_user: "{{ ansible_user }}"
+      run_once: true
+      failed_when: false
+
+    - name: Create monitoring stack values file
+      copy:
+        content: |
+          # Grafana k8s monitoring stack for ansible-lab homelab
+          cluster:
+            name: "ansible-lab-cluster"
+            kubernetesAPIService: kubernetes.default.svc.cluster.local:443
+            platform: ""
+
+          # External services - disabled for local deployment
+          externalServices:
+            prometheus:
+              host: ""
+              authMode: none
+            loki:
+              host: ""
+              authMode: none
+            tempo:
+              host: ""
+              authMode: none
+
+          # Metrics collection
+          metrics:
+            enabled: true
+            autoDiscovery:
+              enabled: true
+            cost:
+              enabled: true
+            node-exporter:
+              enabled: true
+
+          # Logs collection
+          logs:
+            enabled: true
+            pod_logs:
+              enabled: true
+            cluster_events:
+              enabled: true
+
+          # Traces - disabled for homelab
+          traces:
+            enabled: false
+
+          # Profiles - disabled for homelab  
+          profiles:
+            enabled: false
+
+          # Receivers - disabled for homelab
+          receivers:
+            grpc:
+              enabled: false
+            http:
+              enabled: false
+            zipkin:
+              enabled: false
+            jaeger:
+              enabled: false
+
+          # Grafana Alloy configuration
+          alloy:
+            resources:
+              requests:
+                cpu: 100m
+                memory: 128Mi
+              limits:
+                cpu: 500m
+                memory: 512Mi
+
+          # Alloy logs
+          alloy-logs:
+            enabled: true
+            resources:
+              requests:
+                cpu: 50m
+                memory: 64Mi
+              limits:
+                cpu: 200m
+                memory: 256Mi
+
+          # Prometheus Node Exporter
+          prometheus-node-exporter:
+            enabled: true
+            resources:
+              requests:
+                cpu: 50m
+                memory: 30Mi
+              limits:
+                cpu: 200m
+                memory: 180Mi
+
+          # Kube State Metrics
+          kube-state-metrics:
+            enabled: true
+            resources:
+              requests:
+                cpu: 50m
+                memory: 50Mi
+              limits:
+                cpu: 200m
+                memory: 200Mi
+
+          # OpenCost - disabled for homelab
+          opencost:
+            enabled: false
+
+          # Kepler - disabled for homelab
+          kepler:
+            enabled: false
+
+          # Beyla - disabled for homelab
+          beyla:
+            enabled: false
+
+          # Prometheus Operator CRDs
+          prometheus-operator-crds:
+            enabled: true
+
+          # Windows exporter - disabled
+          prometheus-windows-exporter:
+            enabled: false
+        dest: "/tmp/monitoring-values.yaml"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    - name: Install Grafana k8s monitoring stack
+      kubernetes.core.helm:
+        name: k8s-monitoring
+        chart_ref: grafana/k8s-monitoring
+        release_namespace: "{{ monitoring_namespace }}"
+        create_namespace: true
+        values_files:
+          - "/tmp/monitoring-values.yaml"
+        wait: true
+        wait_timeout: 600s
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Create standalone Grafana values file
+      copy:
+        content: |
+          # Standalone Grafana for homelab monitoring
+          adminPassword: "{{ grafana_admin_password }}"
+          
+          persistence:
+            enabled: true
+            storageClassName: longhorn
+            size: 10Gi
+
+          # Resource limits for homelab
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
+          # Service configuration
+          service:
+            type: ClusterIP
+            port: 80
+
+          # Ingress disabled - access via port-forward
+          ingress:
+            enabled: false
+
+          # Data sources
+          datasources:
+            datasources.yaml:
+              apiVersion: 1
+              datasources:
+                - name: Prometheus
+                  type: prometheus
+                  url: http://prometheus-server.monitoring.svc.cluster.local
+                  access: proxy
+                  isDefault: true
+                - name: Loki
+                  type: loki
+                  url: http://loki.monitoring.svc.cluster.local:3100
+                  access: proxy
+
+          # Dashboard providers
+          dashboardProviders:
+            dashboardproviders.yaml:
+              apiVersion: 1
+              providers:
+                - name: 'default'
+                  orgId: 1
+                  folder: ''
+                  type: file
+                  disableDeletion: false
+                  editable: true
+                  options:
+                    path: /var/lib/grafana/dashboards/default
+
+          dashboards:
+            default:
+              kubernetes-cluster-monitoring:
+                gnetId: 7249
+                revision: 1
+                datasource: Prometheus
+              kubernetes-pod-monitoring:
+                gnetId: 6417
+                revision: 1
+                datasource: Prometheus
+              node-exporter:
+                gnetId: 1860
+                revision: 27
+                datasource: Prometheus
+
+          # Grafana configuration
+          grafana.ini:
+            server:
+              root_url: http://localhost:3000
+            security:
+              admin_user: admin
+              admin_password: "{{ grafana_admin_password }}"
+            users:
+              allow_sign_up: false
+        dest: "/tmp/grafana-values.yaml"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    - name: Install standalone Grafana
+      kubernetes.core.helm:
+        name: grafana
+        chart_ref: grafana/grafana
+        release_namespace: "{{ monitoring_namespace }}"
+        values_files:
+          - "/tmp/grafana-values.yaml"
+        wait: true
+        wait_timeout: 300s
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Install Prometheus (standalone for local metrics storage)
+      kubernetes.core.helm:
+        name: prometheus
+        chart_ref: prometheus-community/prometheus
+        release_namespace: "{{ monitoring_namespace }}"
+        values:
+          server:
+            persistentVolume:
+              enabled: true
+              storageClass: longhorn
+              size: 20Gi
+            resources:
+              requests:
+                cpu: 200m
+                memory: 256Mi
+              limits:
+                cpu: 1000m
+                memory: 1Gi
+          alertmanager:
+            enabled: false  # Disable for homelab
+          prometheus-node-exporter:
+            enabled: false  # Already enabled in k8s-monitoring
+          prometheus-pushgateway:
+            enabled: false  # Disable for homelab
+          kube-state-metrics:
+            enabled: false  # Already enabled in k8s-monitoring
+        wait: true
+        wait_timeout: 600s
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Wait for monitoring components to be ready
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ monitoring_namespace }}"
+        label_selectors:
+          - app.kubernetes.io/name=grafana
+        wait: true
+        wait_condition:
+          type: Ready
+          status: "True"
+        wait_timeout: 300
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Get monitoring services info
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Service
+        namespace: "{{ monitoring_namespace }}"
+      become_user: "{{ ansible_user }}"
+      register: monitoring_services
+      run_once: true
+
+    - name: Display monitoring stack installation summary
+      debug:
+        msg:
+          - "================================="
+          - "📊 MONITORING STACK READY!"
+          - "================================="
+          - ""
+          - "✅ Grafana k8s monitoring stack installed"
+          - "✅ Standalone Grafana with dashboards"
+          - "✅ Prometheus for metrics storage"
+          - "✅ Node exporter and kube-state-metrics"
+          - "✅ Log collection with Alloy"
+          - ""
+          - "📊 Access Information:"
+          - "  Namespace: {{ monitoring_namespace }}"
+          - "  Admin Username: admin"
+          - "  Admin Password: {{ grafana_admin_password }}"
+          - ""
+          - "🔧 Access Grafana Dashboard:"
+          - "  kubectl port-forward -n {{ monitoring_namespace }} svc/grafana 3000:80"
+          - "  Then visit: http://localhost:3000"
+          - ""
+          - "🔧 Access Prometheus:"
+          - "  kubectl port-forward -n {{ monitoring_namespace }} svc/prometheus-server 9090:80"
+          - "  Then visit: http://localhost:9090"
+          - ""
+          - "📈 Pre-configured Dashboards:"
+          - "  • Kubernetes Cluster Monitoring"
+          - "  • Kubernetes Pod Monitoring" 
+          - "  • Node Exporter System Metrics"
+          - ""
+          - "📝 Features Available:"
+          - "  • Real-time cluster metrics"
+          - "  • Pod and container monitoring"
+          - "  • System resource tracking"
+          - "  • Log aggregation and search"
+          - "  • Custom dashboard creation"
+      run_once: true
+
+    - name: Clean up temporary files
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "/tmp/monitoring-values.yaml"
+        - "/tmp/grafana-values.yaml"

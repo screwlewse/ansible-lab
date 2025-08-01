@@ -94,9 +94,7 @@ case $OPTION in
         ;;
     2)
         echo "📊 Installing Monitoring Stack..."
-        # This will be created in the next tasks
-        echo "⚠️  Monitoring playbook will be available after completing all tasks"
-        echo "For now, you can deploy via ArgoCD after installing GitOps"
+        ansible-playbook -i inventories/homelab.ini playbooks/install_monitoring_stack.yml
         ;;
     3)
         echo "🌐 Installing Service Mesh..."
@@ -111,7 +109,11 @@ case $OPTION in
         ansible-playbook -i inventories/homelab.ini playbooks/install_argocd_gitops.yml
         
         echo ""
-        echo "Phase 2: Additional components can be deployed via ArgoCD"
+        echo "Phase 2: Monitoring Stack"
+        ansible-playbook -i inventories/homelab.ini playbooks/install_monitoring_stack.yml
+        
+        echo ""
+        echo "Phase 3: Additional components can be deployed via ArgoCD"
         echo "See ~/applications/ directory for available components"
         ;;
     *)
@@ -143,6 +145,19 @@ if [ $? -eq 0 ]; then
         echo "   Visit: http://localhost:8080"
         echo "   Username: admin"
         echo "   Password: homelab-admin"
+        echo ""
+    fi
+    
+    if [[ $OPTION == "2" || $OPTION == "4" ]]; then
+        echo "📊 Grafana Monitoring Dashboard:"
+        echo "   kubectl port-forward -n monitoring svc/grafana 3000:80"
+        echo "   Visit: http://localhost:3000"
+        echo "   Username: admin"
+        echo "   Password: homelab-admin"
+        echo ""
+        echo "📈 Prometheus Metrics:"
+        echo "   kubectl port-forward -n monitoring svc/prometheus-server 9090:80"
+        echo "   Visit: http://localhost:9090"
         echo ""
     fi
     
