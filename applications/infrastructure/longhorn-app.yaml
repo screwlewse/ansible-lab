@@ -1,0 +1,69 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: longhorn
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://charts.longhorn.io
+    chart: longhorn
+    targetRevision: 1.5.5
+    helm:
+      values: |
+        # Longhorn configuration for homelab
+        persistence:
+          defaultClass: true
+          defaultClassReplicaCount: 1
+          reclaimPolicy: Retain
+
+        defaultSettings:
+          defaultReplicaCount: 1
+          guaranteedEngineManagerCPU: 0.1
+          guaranteedReplicaManagerCPU: 0.1
+          createDefaultDiskLabeledNodes: true
+          defaultDataPath: "/var/lib/longhorn/"
+          replicaSoftAntiAffinity: false
+          storageOverProvisioningPercentage: 200
+          storageMinimalAvailablePercentage: 25
+          upgradeChecker: false
+
+        longhornManager:
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
+        service:
+          ui:
+            type: ClusterIP
+
+        ingress:
+          enabled: false
+
+        networkPolicies:
+          enabled: false
+          type: "k3s"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: longhorn-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

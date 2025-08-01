@@ -1,0 +1,313 @@
+---
+- name: Install ArgoCD GitOps Platform
+  hosts: all
+  become: true
+  vars_files:
+    - ../group_vars/all.yml
+
+  vars:
+    argocd_namespace: "argocd"
+    argocd_version: "v2.9.7"
+    argocd_admin_password: "homelab-admin"  # Change in production!
+
+  tasks:
+    - name: Create ArgoCD namespace
+      kubernetes.core.k8s:
+        name: "{{ argocd_namespace }}"
+        api_version: v1
+        kind: Namespace
+        state: present
+        kubeconfig: "/home/{{ ansible_user }}/.kube/config"
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Add ArgoCD Helm repository
+      kubernetes.core.helm_repository:
+        name: argo
+        repo_url: https://argoproj.github.io/argo-helm
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Update Helm repositories
+      kubernetes.core.helm:
+        name: dummy
+        chart_ref: argo/argo-cd
+        release_namespace: "{{ argocd_namespace }}"
+        state: absent
+        update_repo_cache: true
+      become_user: "{{ ansible_user }}"
+      run_once: true
+      failed_when: false
+
+    - name: Create ArgoCD values file
+      copy:
+        content: |
+          # ArgoCD configuration for ansible-lab homelab
+          global:
+            image:
+              tag: "{{ argocd_version }}"
+
+          ## Server configuration
+          server:
+            # Disable HTTPS for internal lab use
+            extraArgs:
+              - --insecure
+            
+            # Resource limits for homelab
+            resources:
+              requests:
+                cpu: 100m
+                memory: 128Mi
+              limits:
+                cpu: 500m
+                memory: 512Mi
+
+            # Service configuration
+            service:
+              type: ClusterIP
+              
+            # Ingress disabled - access via port-forward
+            ingress:
+              enabled: false
+
+          ## Application Controller
+          controller:
+            resources:
+              requests:
+                cpu: 250m
+                memory: 256Mi
+              limits:
+                cpu: 1000m
+                memory: 1Gi
+
+          ## Repository Server
+          repoServer:
+            resources:
+              requests:
+                cpu: 100m
+                memory: 128Mi
+              limits:
+                cpu: 500m
+                memory: 512Mi
+
+          ## ApplicationSet Controller
+          applicationSet:
+            resources:
+              requests:
+                cpu: 50m
+                memory: 64Mi
+              limits:
+                cpu: 200m
+                memory: 256Mi
+
+          ## Notifications Controller
+          notifications:
+            enabled: false  # Disable for homelab
+
+          ## Redis (for ArgoCD state)
+          redis:
+            resources:
+              requests:
+                cpu: 50m
+                memory: 64Mi
+              limits:
+                cpu: 200m
+                memory: 256Mi
+
+          ## Redis HA (disabled for single node)
+          redis-ha:
+            enabled: false
+
+          ## External Redis (disabled)
+          externalRedis:
+            host: ""
+            port: 6379
+
+          ## Dex OIDC (disabled for homelab)
+          dex:
+            enabled: false
+
+          ## ArgoCD configuration
+          configs:
+            # Admin password (bcrypt hash of "homelab-admin")
+            secret:
+              argocdServerAdminPassword: "$2a$10$mUFzTz8gLqj/gqDgdSO6mOOSMFl4VgfYzgSDV1JOJ8zQXLEo6VCjy"
+              argocdServerAdminPasswordMtime: "2024-01-01T00:00:00Z"
+              
+            # Repository configuration
+            repositories: {}
+            credentialTemplates: {}
+            
+            # RBAC configuration - permissive for homelab
+            rbac:
+              policy.default: role:admin
+              scopes: '[groups]'
+
+            # ArgoCD CM configuration
+            cm:
+              # Allow any Git repository
+              repositories: |
+                - type: git
+                  url: https://github.com/*/*
+                - type: git
+                  url: https://gitlab.com/*/*
+                
+              # Enable local users
+              accounts.admin: apiKey,login
+
+              # Application management
+              application.instanceLabelKey: argocd.argoproj.io/instance
+              
+              # Timeout settings
+              timeout.reconciliation: 180s
+              timeout.hard.reconciliation: 0s
+
+          ## RBAC roles (permissive for homelab)
+          rbacConfig:
+            policy.default: role:admin
+            scopes: '[groups]'
+        dest: "/tmp/argocd-values.yaml"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    - name: Install ArgoCD using Helm
+      kubernetes.core.helm:
+        name: argocd
+        chart_ref: argo/argo-cd
+        release_namespace: "{{ argocd_namespace }}"
+        create_namespace: true
+        values_files:
+          - "/tmp/argocd-values.yaml"
+        wait: true
+        wait_condition:
+          type: Ready
+          status: "True"
+        wait_timeout: 600s
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Wait for ArgoCD server to be ready
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ argocd_namespace }}"
+        label_selectors:
+          - app.kubernetes.io/name=argocd-server
+        wait: true
+        wait_condition:
+          type: Ready
+          status: "True"
+        wait_timeout: 300
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Create applications directory structure
+      file:
+        path: "/home/{{ ansible_user }}/{{ item }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+      loop:
+        - "applications"
+        - "applications/infrastructure"
+        - "applications/monitoring"
+        - "applications/workloads"
+
+    - name: Create basic ArgoCD Application manifest template
+      copy:
+        content: |
+          apiVersion: argoproj.io/v1alpha1
+          kind: Application
+          metadata:
+            name: example-app
+            namespace: argocd
+            finalizers:
+              - resources-finalizer.argocd.argoproj.io
+          spec:
+            project: default
+            source:
+              repoURL: https://github.com/your-org/your-repo
+              targetRevision: HEAD
+              path: manifests/
+            destination:
+              server: https://kubernetes.default.svc
+              namespace: default
+            syncPolicy:
+              automated:
+                prune: true
+                selfHeal: true
+                allowEmpty: false
+              syncOptions:
+                - CreateNamespace=true
+                - PrunePropagationPolicy=foreground
+                - PruneLast=true
+              retry:
+                limit: 5
+                backoff:
+                  duration: 5s
+                  factor: 2
+                  maxDuration: 3m
+        dest: "/home/{{ ansible_user }}/applications/example-application.yaml"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    - name: Get ArgoCD admin password
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: argocd-initial-admin-secret
+        namespace: "{{ argocd_namespace }}"
+      become_user: "{{ ansible_user }}"
+      register: argocd_secret
+      run_once: true
+
+    - name: Get ArgoCD server service info
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Service
+        name: argocd-server
+        namespace: "{{ argocd_namespace }}"
+      become_user: "{{ ansible_user }}"
+      register: argocd_service
+      run_once: true
+
+    - name: Display ArgoCD installation summary
+      debug:
+        msg:
+          - "================================="
+          - "🚀 ARGOCD GITOPS READY!"
+          - "================================="
+          - ""
+          - "✅ ArgoCD GitOps platform installed"
+          - "✅ Applications directory structure created"
+          - "✅ Example application template provided"
+          - ""
+          - "📊 Access Information:"
+          - "  Namespace: {{ argocd_namespace }}"
+          - "  Version: {{ argocd_version }}"
+          - "  Username: admin"
+          - "  Password: {{ argocd_admin_password }}"
+          - ""
+          - "🔧 Access ArgoCD UI:"
+          - "  kubectl port-forward -n {{ argocd_namespace }} svc/argocd-server 8080:80"
+          - "  Then visit: http://localhost:8080"
+          - ""
+          - "📁 Directory Structure:"
+          - "  ~/applications/infrastructure/ - Core platform apps"
+          - "  ~/applications/monitoring/    - Observability stack"
+          - "  ~/applications/workloads/     - Application workloads"
+          - ""
+          - "📝 Next Steps:"
+          - "  1. Create Git repository for your applications"
+          - "  2. Add Application manifests to ~/applications/"
+          - "  3. Deploy using: kubectl apply -f ~/applications/"
+          - "  4. Access ArgoCD UI to monitor deployments"
+      run_once: true
+
+    - name: Clean up temporary files
+      file:
+        path: "/tmp/argocd-values.yaml"
+        state: absent

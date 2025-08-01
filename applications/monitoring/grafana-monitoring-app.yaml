@@ -1,0 +1,89 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: grafana-k8s-monitoring
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://grafana.github.io/helm-charts
+    chart: k8s-monitoring
+    targetRevision: 1.0.8
+    helm:
+      values: |
+        # Grafana k8s monitoring stack for homelab
+        cluster:
+          name: ansible-lab-cluster
+
+        # Metrics configuration
+        metrics:
+          enabled: true
+          
+        # Logs configuration  
+        logs:
+          enabled: true
+          cluster_events:
+            enabled: true
+
+        # Traces configuration
+        traces:
+          enabled: false  # Disable for homelab
+
+        # Grafana Alloy configuration
+        alloy:
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
+        # Node exporter
+        prometheus-node-exporter:
+          resources:
+            requests:
+              cpu: 50m
+              memory: 30Mi
+            limits:
+              cpu: 200m
+              memory: 180Mi
+
+        # Kube state metrics
+        kube-state-metrics:
+          resources:
+            requests:
+              cpu: 50m
+              memory: 50Mi
+            limits:
+              cpu: 200m
+              memory: 200Mi
+
+        # External services (Grafana Cloud - disabled for homelab)
+        externalServices:
+          prometheus:
+            host: ""
+          loki:
+            host: ""
+          tempo:
+            host: ""
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
