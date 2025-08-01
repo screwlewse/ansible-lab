@@ -4,7 +4,7 @@ Automated setup for transforming fresh Ubuntu installations into production-read
 
 ## Overview
 
-This Ansible-based automation project provides a streamlined 3-step process to convert bare Ubuntu Server installations into fully-configured Kubernetes nodes with Docker, k3s, and Longhorn distributed storage. The platform is designed to host containerized development environments and CI/CD workloads rather than installing tools directly on the host.
+This Ansible-based automation project provides a streamlined 3-step base setup to convert bare Ubuntu Server installations into production-ready Kubernetes nodes with Docker, k3s, and Longhorn distributed storage. An optional 4th step adds enterprise-grade components (GitOps, monitoring, service mesh). The platform is designed to host containerized development environments and CI/CD workloads rather than installing tools directly on the host.
 
 ## Quick Start
 
@@ -15,19 +15,23 @@ This Ansible-based automation project provides a streamlined 3-step process to c
 # Step 2: Bootstrap system (one-time sudo password prompt)
 ./bootstrap.sh
 
-# Step 3: Complete platform setup (fully automated, ~15-20 minutes)
+# Step 3: Complete platform setup (fully automated, ~20-25 minutes)  
 ./setup_homelab.sh
+
+# Step 4 (Optional): Enterprise components (GitOps, monitoring, service mesh)
+./setup_enterprise.sh
 ```
 
 ## Project Structure
 
 ### Setup Scripts
 - `setup_ssh.sh` - Copies SSH keys to target hosts for passwordless authentication
-- `bootstrap.sh` - Initial system bootstrap with sudo configuration and prerequisites
+- `bootstrap.sh` - Initial system bootstrap with sudo configuration and prerequisites  
 - `setup_homelab.sh` - Complete automated platform setup orchestrator
+- `setup_enterprise.sh` - Optional enterprise components (GitOps, monitoring, service mesh)
 
 ### Ansible Files
-- `site.yml` - Master playbook orchestrating the complete 7-phase setup process
+- `site.yml` - Master playbook orchestrating the complete 8-phase setup process
 - `inventories/homelab.ini` - Ansible inventory defining target hosts (default: 10.0.0.175)
 - `group_vars/all.yml` - Global variables including SSH keys and user configuration
 
