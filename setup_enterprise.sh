@@ -104,6 +104,12 @@ echo "     • Linkerd for traffic management"
 echo "     • Automatic mTLS between services"
 echo "     • Advanced observability"
 echo ""
+echo "   🔒 Security Policies:"
+echo "     • Network policies for micro-segmentation"
+echo "     • Pod Security Standards enforcement"
+echo "     • Automated mTLS certificate management"
+echo "     • Fine-grained authorization policies"
+echo ""
 echo "   🎛️  Management Tools:"
 echo "     • Cluster visualization tools"
 echo "     • Enhanced administrative interfaces"
@@ -121,10 +127,11 @@ echo "📋 Available enterprise components:"
 echo "   1. GitOps (ArgoCD) - Recommended first"
 echo "   2. Monitoring Stack (Grafana + Prometheus)"
 echo "   3. Service Mesh (Linkerd)"
-echo "   4. All Components"
+echo "   4. Security Policies (Network Policies + mTLS)"
+echo "   5. All Components"
 echo ""
 
-read -p "Select installation option (1-4): " -n 1 -r OPTION
+read -p "Select installation option (1-5): " -n 1 -r OPTION
 echo
 echo
 
@@ -145,6 +152,11 @@ case $OPTION in
         ansible-playbook -i "$INVENTORY_FILE" playbooks/install_linkerd_service_mesh.yml
         ;;
     4)
+        echo "🔒 Installing Security Policies..."
+        ansible-playbook -i "$INVENTORY_FILE" playbooks/install_security_policies.yml
+        ansible-playbook -i "$INVENTORY_FILE" playbooks/configure_mtls_automation.yml
+        ;;
+    5)
         echo "🚀 Installing All Enterprise Components..."
         echo ""
         echo "Phase 1: GitOps Platform"
@@ -159,7 +171,12 @@ case $OPTION in
         ansible-playbook -i "$INVENTORY_FILE" playbooks/install_linkerd_service_mesh.yml
         
         echo ""
-        echo "Phase 4: Additional components can be deployed via ArgoCD"
+        echo "Phase 4: Security Policies"
+        ansible-playbook -i "$INVENTORY_FILE" playbooks/install_security_policies.yml
+        ansible-playbook -i "$INVENTORY_FILE" playbooks/configure_mtls_automation.yml
+        
+        echo ""
+        echo "Phase 5: Additional components can be deployed via ArgoCD"
         echo "See ~/applications/ directory for available components"
         ;;
     *)
@@ -207,12 +224,24 @@ if [ $? -eq 0 ]; then
         echo ""
     fi
     
-    if [[ $OPTION == "3" || $OPTION == "4" ]]; then
+    if [[ $OPTION == "3" || $OPTION == "5" ]]; then
         echo "🌐 Linkerd Service Mesh Dashboard:"
         echo "   linkerd viz dashboard &"
         echo "   OR"
         echo "   kubectl port-forward -n linkerd-viz svc/web 8084:8084"
         echo "   Visit: http://localhost:8084"
+        echo ""
+    fi
+    
+    if [[ $OPTION == "4" || $OPTION == "5" ]]; then
+        echo "🔒 Security Policy Management:"
+        echo "   ~/apply-security-policies.sh  # Apply network policies"
+        echo "   ~/manage-mtls.sh              # Configure mTLS automation"
+        echo "   ~/rotate-certificates.sh      # Certificate rotation"
+        echo ""
+        echo "🔍 Security Verification:"
+        echo "   kubectl get networkpolicies -A"
+        echo "   linkerd viz stat deployments -A"
         echo ""
     fi
     

@@ -1,0 +1,644 @@
+---
+- name: Configure Automatic mTLS with Linkerd Service Mesh
+  hosts: all
+  become: true
+  vars_files:
+    - ../group_vars/all.yml
+
+  vars:
+    linkerd_namespace: "linkerd"
+    linkerd_viz_namespace: "linkerd-viz"
+
+  tasks:
+    - name: Check if Linkerd is installed
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: "{{ linkerd_namespace }}"
+      become_user: "{{ ansible_user }}"
+      register: linkerd_check
+      run_once: true
+
+    - name: Fail if Linkerd is not installed
+      fail:
+        msg: "Linkerd service mesh must be installed first. Run install_linkerd_service_mesh.yml"
+      when: linkerd_check.resources | length == 0
+
+    - name: Create automatic injection configuration for namespaces
+      copy:
+        content: |
+          ---
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: secure-apps
+            annotations:
+              linkerd.io/inject: enabled
+            labels:
+              linkerd.io/control-plane-ns: linkerd
+              config.linkerd.io/default-inbound-policy: deny
+          ---
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: web-apps
+            annotations:
+              linkerd.io/inject: enabled
+            labels:
+              linkerd.io/control-plane-ns: linkerd
+              config.linkerd.io/default-inbound-policy: cluster-authenticated
+          ---
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: backend-services
+            annotations:
+              linkerd.io/inject: enabled
+            labels:
+              linkerd.io/control-plane-ns: linkerd
+              config.linkerd.io/default-inbound-policy: cluster-authenticated
+        dest: "/home/{{ ansible_user }}/linkerd-mtls-namespaces.yaml"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    - name: Create Linkerd Server policies for fine-grained mTLS control
+      copy:
+        content: |
+          ---
+          # Web frontend server policy - allow from ingress and web-apps
+          apiVersion: policy.linkerd.io/v1beta1
+          kind: Server
+          metadata:
+            name: web-frontend
+            namespace: web-apps
+          spec:
+            podSelector:
+              matchLabels:
+                app: web-frontend
+            port: 8080
+            proxyProtocol: HTTP/2
+          ---
+          apiVersion: policy.linkerd.io/v1beta1
+          kind: ServerAuthorization
+          metadata:
+            name: web-frontend-authz
+            namespace: web-apps
+          spec:
+            server:
+              name: web-frontend
+            requiredRoutes:
+            - pathRegex: "/api/.*"
+              methods: ["GET", "POST"]
+            client:
+              networks:
+              - cidr: 10.0.0.0/8
+              - cidr: 172.16.0.0/12
+              - cidr: 192.168.0.0/16
+          ---
+          # Backend API server policy - allow only from web-apps and backend-services
+          apiVersion: policy.linkerd.io/v1beta1
+          kind: Server
+          metadata:
+            name: backend-api
+            namespace: backend-services
+          spec:
+            podSelector:
+              matchLabels:
+                app: backend-api
+            port: 8080
+            proxyProtocol: HTTP/2
+          ---
+          apiVersion: policy.linkerd.io/v1beta1
+          kind: ServerAuthorization
+          metadata:
+            name: backend-api-authz
+            namespace: backend-services
+          spec:
+            server:
+              name: backend-api
+            client:
+              meshTLS:
+                serviceAccounts:
+                - name: web-frontend
+                  namespace: web-apps
+                - name: data-processor
+                  namespace: backend-services
+          ---
+          # Database server policy - allow only from backend-services
+          apiVersion: policy.linkerd.io/v1beta1
+          kind: Server
+          metadata:
+            name: database
+            namespace: backend-services
+          spec:
+            podSelector:
+              matchLabels:
+                app: database
+            port: 5432
+          ---
+          apiVersion: policy.linkerd.io/v1beta1
+          kind: ServerAuthorization
+          metadata:
+            name: database-authz
+            namespace: backend-services
+          spec:
+            server:
+              name: database
+            client:
+              meshTLS:
+                serviceAccounts:
+                - name: backend-api
+                  namespace: backend-services
+                - name: data-processor
+                  namespace: backend-services
+        dest: "/home/{{ ansible_user }}/linkerd-server-policies.yaml"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    - name: Create HTTPRoute policies for traffic management
+      copy:
+        content: |
+          ---
+          # HTTP route for web frontend with traffic splitting
+          apiVersion: policy.linkerd.io/v1beta1
+          kind: HTTPRoute
+          metadata:
+            name: web-frontend-route
+            namespace: web-apps
+          spec:
+            parentRefs:
+            - name: web-frontend
+              kind: Server
+              group: policy.linkerd.io
+            rules:
+            - matches:
+              - path:
+                  type: PathPrefix
+                  value: "/api/v1"
+              backendRefs:
+              - name: backend-api
+                namespace: backend-services
+                port: 8080
+                weight: 90
+              - name: backend-api-canary
+                namespace: backend-services
+                port: 8080
+                weight: 10
+            - matches:
+              - path:
+                  type: PathPrefix
+                  value: "/health"
+              backendRefs:
+              - name: web-frontend
+                port: 8080
+          ---
+          # Circuit breaker configuration
+          apiVersion: policy.linkerd.io/v1alpha1
+          kind: HTTPLocalRateLimitPolicy
+          metadata:
+            name: backend-api-rate-limit
+            namespace: backend-services
+          spec:
+            targetRef:
+              group: policy.linkerd.io
+              kind: HTTPRoute
+              name: backend-api-route
+            config:
+              requestsPerUnit: 100
+              unit: minute
+          ---
+          # Retry policy for resilience
+          apiVersion: policy.linkerd.io/v1beta1
+          kind: HTTPRoute
+          metadata:
+            name: backend-api-route
+            namespace: backend-services
+          spec:
+            parentRefs:
+            - name: backend-api
+              kind: Server
+              group: policy.linkerd.io
+            rules:
+            - matches:
+              - path:
+                  type: PathPrefix
+                  value: "/"
+              backendRefs:
+              - name: backend-api
+                port: 8080
+              timeouts:
+                request: 30s
+              retry:
+                codes: [502, 503, 504]
+                limit: 3
+        dest: "/home/{{ ansible_user }}/linkerd-traffic-policies.yaml"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    - name: Create automatic mTLS verification script
+      copy:
+        content: |
+          #!/bin/bash
+          
+          # Linkerd mTLS Verification and Management Script
+          
+          set -e
+          
+          echo "🔒 Linkerd mTLS Verification and Configuration"
+          echo "============================================="
+          echo ""
+          
+          # Function to check if command exists
+          command_exists() {
+              command -v "$1" >/dev/null 2>&1
+          }
+          
+          # Check if linkerd CLI is available
+          if ! command_exists linkerd; then
+              echo "❌ Linkerd CLI not found. Installing..."
+              curl -sL https://run.linkerd.io/install | sh
+              sudo mv $HOME/.linkerd2/bin/linkerd /usr/local/bin/
+          fi
+          
+          echo "🔍 Checking Linkerd installation..."
+          linkerd check
+          echo ""
+          
+          echo "🔍 Checking Linkerd data plane..."
+          linkerd check --proxy
+          echo ""
+          
+          echo "📊 Current mTLS status across all namespaces:"
+          linkerd viz stat namespaces
+          echo ""
+          
+          echo "🔐 Detailed mTLS statistics:"
+          linkerd viz stat deployments --all-namespaces
+          echo ""
+          
+          echo "🌐 Service mesh topology:"
+          linkerd viz edges namespaces
+          echo ""
+          
+          # Function to apply mTLS configurations
+          apply_mtls_config() {
+              echo "🚀 Applying mTLS configurations..."
+              
+              echo "📂 Creating mTLS-enabled namespaces..."
+              kubectl apply -f linkerd-mtls-namespaces.yaml
+              
+              echo "🛡️  Applying server authorization policies..."
+              kubectl apply -f linkerd-server-policies.yaml
+              
+              echo "🚦 Applying traffic management policies..."  
+              kubectl apply -f linkerd-traffic-policies.yaml
+              
+              echo "✅ mTLS configurations applied successfully!"
+              echo ""
+          }
+          
+          # Function to verify mTLS is working
+          verify_mtls() {
+              echo "🧪 Verifying mTLS functionality..."
+              echo ""
+              
+              # Check control plane mTLS
+              echo "🔐 Control plane mTLS certificates:"
+              linkerd viz authz --from default --to linkerd/linkerd-identity
+              echo ""
+              
+              # Check data plane proxy certificates  
+              echo "🔐 Data plane proxy certificates:"
+              linkerd viz tap deploy/web-frontend --namespace web-apps | head -20 || echo "No traffic to tap (deploy apps first)"
+              echo ""
+              
+              # Show authorization policies
+              echo "📋 Active authorization policies:"
+              kubectl get serverauthorizations -A
+              echo ""
+              
+              echo "📋 Active server policies:"
+              kubectl get servers -A
+              echo ""
+          }
+          
+          # Function to create demo applications with mTLS
+          create_demo_apps() {
+              echo "🏗️  Creating demo applications with automatic mTLS..."
+              
+              cat <<EOF | kubectl apply -f -
+          ---
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: web-frontend
+            namespace: web-apps
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: web-frontend
+            template:
+              metadata:
+                labels:
+                  app: web-frontend
+              spec:
+                containers:
+                - name: web
+                  image: nginx:alpine
+                  ports:
+                  - containerPort: 80
+                  resources:
+                    requests:
+                      cpu: 50m
+                      memory: 64Mi
+                    limits:
+                      cpu: 200m
+                      memory: 128Mi
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: web-frontend
+            namespace: web-apps
+          spec:
+            selector:
+              app: web-frontend
+            ports:
+            - port: 8080
+              targetPort: 80
+          ---
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: backend-api
+            namespace: backend-services
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: backend-api
+            template:
+              metadata:
+                labels:
+                  app: backend-api
+              spec:
+                containers:
+                - name: backend
+                  image: httpd:alpine
+                  ports:
+                  - containerPort: 80
+                  resources:
+                    requests:
+                      cpu: 50m
+                      memory: 64Mi
+                    limits:
+                      cpu: 200m
+                      memory: 128Mi
+          ---
+          apiVersion: v1
+          kind: Service  
+          metadata:
+            name: backend-api
+            namespace: backend-services
+          spec:
+            selector:
+              app: backend-api
+            ports:
+            - port: 8080
+              targetPort: 80
+          EOF
+              
+              echo "✅ Demo applications created with automatic Linkerd injection!"
+              echo "⏳ Waiting for pods to be ready..."
+              kubectl wait --for=condition=ready pod -l app=web-frontend -n web-apps --timeout=120s
+              kubectl wait --for=condition=ready pod -l app=backend-api -n backend-services --timeout=120s
+              echo ""
+          }
+          
+          # Main menu
+          echo "Select an option:"
+          echo "1. Apply mTLS configurations"
+          echo "2. Verify mTLS status"
+          echo "3. Create demo applications"
+          echo "4. All of the above"
+          echo "5. Exit"
+          echo ""
+          
+          read -p "Enter choice (1-5): " -r CHOICE
+          echo ""
+          
+          case $CHOICE in
+              1)
+                  apply_mtls_config
+                  ;;
+              2)  
+                  verify_mtls
+                  ;;
+              3)
+                  create_demo_apps
+                  ;;
+              4)
+                  apply_mtls_config
+                  verify_mtls
+                  create_demo_apps
+                  ;;
+              5)
+                  echo "👋 Exiting..."
+                  exit 0
+                  ;;
+              *)
+                  echo "❌ Invalid choice. Exiting..."
+                  exit 1
+                  ;;
+          esac
+          
+          echo ""
+          echo "🎉 Linkerd mTLS operations completed!"
+          echo ""
+          echo "📊 Useful commands for ongoing management:"
+          echo "  linkerd viz stat deployments -A    # View mTLS statistics"
+          echo "  linkerd viz tap deploy/APP -n NS   # Live traffic tap"
+          echo "  linkerd viz authz --from NS --to NS/SERVICE  # Check authorization"
+          echo "  kubectl get serverauthorizations -A  # View policies"
+          echo ""
+          echo "🔍 Access Linkerd dashboard:"
+          echo "  linkerd viz dashboard &"
+        dest: "/home/{{ ansible_user }}/manage-mtls.sh"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+
+    - name: Create certificate rotation automation script
+      copy:
+        content: |
+          #!/bin/bash
+          
+          # Automated Certificate Rotation for Linkerd mTLS
+          
+          set -e
+          
+          BACKUP_DIR="/home/{{ ansible_user }}/linkerd-cert-backups"
+          CERT_DIR="/home/{{ ansible_user }}"
+          
+          echo "🔄 Linkerd Certificate Rotation Automation"
+          echo "========================================="
+          echo ""
+          
+          # Create backup directory
+          mkdir -p "$BACKUP_DIR"
+          
+          # Function to backup current certificates
+          backup_certificates() {
+              local backup_date=$(date +%Y%m%d_%H%M%S)
+              local backup_path="$BACKUP_DIR/certs_$backup_date"
+              
+              echo "💾 Backing up current certificates..."
+              mkdir -p "$backup_path"
+              
+              if [ -f "$CERT_DIR/ca.crt" ]; then
+                  cp "$CERT_DIR/ca.crt" "$backup_path/"
+                  cp "$CERT_DIR/ca.key" "$backup_path/"
+                  cp "$CERT_DIR/issuer.crt" "$backup_path/"
+                  cp "$CERT_DIR/issuer.key" "$backup_path/"
+                  echo "✅ Certificates backed up to $backup_path"
+              else
+                  echo "⚠️  No existing certificates found to backup"
+              fi
+          }
+          
+          # Function to generate new certificates
+          generate_new_certificates() {
+              echo "🔑 Generating new root CA certificate..."
+              step certificate create root.linkerd.cluster.local "$CERT_DIR/ca-new.crt" "$CERT_DIR/ca-new.key" \
+                  --profile root-ca --no-password --insecure --force
+              
+              echo "🔑 Generating new issuer certificate..."
+              step certificate create identity.linkerd.cluster.local "$CERT_DIR/issuer-new.crt" "$CERT_DIR/issuer-new.key" \
+                  --profile intermediate-ca --not-after 8760h --no-password --insecure \
+                  --ca "$CERT_DIR/ca-new.crt" --ca-key "$CERT_DIR/ca-new.key" --force
+              
+              echo "✅ New certificates generated"
+          }
+          
+          # Function to update Linkerd with new certificates
+          update_linkerd_certificates() {
+              echo "🔄 Updating Linkerd control plane with new certificates..."
+              
+              # Update the control plane with new certificates
+              helm upgrade linkerd-control-plane linkerd/linkerd-control-plane \
+                  --namespace linkerd \
+                  --set-file identity.issuer.tls.crtPEM="$CERT_DIR/issuer-new.crt" \
+                  --set-file identity.issuer.tls.keyPEM="$CERT_DIR/issuer-new.key" \
+                  --set-file identityTrustAnchorsPEM="$CERT_DIR/ca-new.crt" \
+                  --wait
+              
+              echo "✅ Linkerd control plane updated with new certificates"
+          }
+          
+          # Function to verify certificate rotation
+          verify_rotation() {
+              echo "🧪 Verifying certificate rotation..."
+              
+              # Check control plane health
+              linkerd check
+              
+              # Check that certificates are being used
+              echo "📋 Certificate information:"
+              kubectl get secret linkerd-identity-issuer -n linkerd -o yaml | grep crt | head -1
+              
+              echo "✅ Certificate rotation verification completed"
+          }
+          
+          # Function to cleanup old certificates
+          cleanup_old_certificates() {
+              echo "🧹 Moving new certificates to active position..."
+              
+              mv "$CERT_DIR/ca-new.crt" "$CERT_DIR/ca.crt"
+              mv "$CERT_DIR/ca-new.key" "$CERT_DIR/ca.key"  
+              mv "$CERT_DIR/issuer-new.crt" "$CERT_DIR/issuer.crt"
+              mv "$CERT_DIR/issuer-new.key" "$CERT_DIR/issuer.key"
+              
+              echo "✅ Certificate files updated"
+          }
+          
+          # Check if step CLI is available
+          if ! command -v step >/dev/null 2>&1; then
+              echo "❌ step CLI is required but not installed."
+              echo "Install it with: wget -O step.tar.gz https://github.com/smallstep/cli/releases/latest/download/step_linux_amd64.tar.gz && tar -xzf step.tar.gz && sudo mv step_*/bin/step /usr/local/bin/"
+              exit 1
+          fi
+          
+          # Main execution
+          echo "⚠️  This will rotate Linkerd mTLS certificates."
+          echo "   The control plane will be briefly unavailable during the update."
+          echo ""
+          read -p "Continue with certificate rotation? (y/N): " -r
+          if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+              echo "Certificate rotation cancelled."
+              exit 0
+          fi  
+          
+          backup_certificates
+          generate_new_certificates
+          update_linkerd_certificates
+          verify_rotation
+          cleanup_old_certificates
+          
+          echo ""
+          echo "🎉 Certificate rotation completed successfully!"
+          echo ""
+          echo "📅 Schedule this script to run monthly via cron:"
+          echo "   0 2 1 * * /home/{{ ansible_user }}/rotate-certificates.sh >/var/log/linkerd-cert-rotation.log 2>&1"
+        dest: "/home/{{ ansible_user }}/rotate-certificates.sh"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+
+    - name: Display mTLS automation installation summary
+      debug:
+        msg:
+          - "================================="
+          - "🔐 mTLS AUTOMATION READY!"
+          - "================================="
+          - ""
+          - "✅ Linkerd service mesh mTLS configurations"
+          - "✅ Automatic proxy injection namespaces"  
+          - "✅ Fine-grained authorization policies"
+          - "✅ Traffic management and circuit breaker policies"
+          - "✅ Certificate rotation automation"
+          - ""
+          - "📂 mTLS Configuration Files:"
+          - "  ~/linkerd-mtls-namespaces.yaml - Auto-injection namespaces"
+          - "  ~/linkerd-server-policies.yaml - Server authorization policies"
+          - "  ~/linkerd-traffic-policies.yaml - Traffic management policies"
+          - ""
+          - "🔧 Management Scripts:"
+          - "  ~/manage-mtls.sh - Interactive mTLS management"
+          - "  ~/rotate-certificates.sh - Automated certificate rotation"
+          - ""
+          - "🚀 Configure mTLS Automation:"
+          - "  cd ~/ && ./manage-mtls.sh"
+          - ""
+          - "🔄 Certificate Rotation:"
+          - "  cd ~/ && ./rotate-certificates.sh"
+          - ""
+          - "📊 Monitor mTLS Status:"
+          - "  linkerd viz stat deployments -A"
+          - "  linkerd viz authz --from NS --to NS/SERVICE"
+          - "  linkerd viz tap deploy/APP -n NAMESPACE"
+          - ""
+          - "🎯 Available Security Levels:"
+          - "  • secure-apps - Deny by default, explicit allow"
+          - "  • web-apps - Cluster authenticated (moderate)"
+          - "  • backend-services - Cluster authenticated (moderate)"
+          - ""
+          - "🔒 mTLS provides automatic:"
+          - "  • Service-to-service encryption"
+          - "  • Identity-based authorization"
+          - "  • Traffic observability"
+          - "  • Certificate rotation"
+      run_once: true

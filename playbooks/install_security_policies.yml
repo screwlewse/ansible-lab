@@ -1,0 +1,521 @@
+---
+- name: Install Security Policies and Network Controls
+  hosts: all
+  become: true
+  vars_files:
+    - ../group_vars/all.yml
+
+  vars:
+    security_namespace: "security-system"
+
+  tasks:
+    - name: Create security system namespace
+      kubernetes.core.k8s:
+        name: "{{ security_namespace }}"
+        api_version: v1
+        kind: Namespace
+        state: present
+        kubeconfig: "/home/{{ ansible_user }}/.kube/config"
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Create default deny-all network policy template
+      copy:
+        content: |
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: default-deny-all
+            namespace: default
+          spec:
+            podSelector: {}
+            policyTypes:
+            - Ingress
+            - Egress
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-same-namespace
+            namespace: default
+          spec:
+            podSelector: {}
+            policyTypes:
+            - Ingress
+            - Egress
+            ingress:
+            - from:
+              - namespaceSelector:
+                  matchLabels:
+                    name: default
+            egress:
+            - to:
+              - namespaceSelector:
+                  matchLabels:
+                    name: default
+            - to: {}
+              ports:
+              - protocol: TCP
+                port: 53
+              - protocol: UDP
+                port: 53
+              - protocol: TCP
+                port: 443
+        dest: "/home/{{ ansible_user }}/network-policies-default.yaml"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    - name: Create kube-system network policies
+      copy:
+        content: |
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-kube-system
+            namespace: kube-system
+          spec:
+            podSelector: {}
+            policyTypes:
+            - Ingress
+            - Egress
+            ingress:
+            - {}  # Allow all ingress to kube-system
+            egress:
+            - {}  # Allow all egress from kube-system
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-to-kube-system-dns
+            namespace: default
+          spec:
+            podSelector: {}
+            policyTypes:
+            - Egress
+            egress:
+            - to:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: kube-system
+                podSelector:
+                  matchLabels:
+                    k8s-app: kube-dns
+              ports:
+              - protocol: TCP
+                port: 53
+              - protocol: UDP
+                port: 53
+        dest: "/home/{{ ansible_user }}/network-policies-kube-system.yaml"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    - name: Create monitoring namespace network policies
+      copy:
+        content: |
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-monitoring-ingress
+            namespace: monitoring
+          spec:
+            podSelector: {}
+            policyTypes:
+            - Ingress
+            - Egress
+            ingress:
+            - from:
+              - namespaceSelector: {}
+              ports:
+              - protocol: TCP
+                port: 3000  # Grafana
+              - protocol: TCP
+                port: 9090  # Prometheus
+              - protocol: TCP
+                port: 3100  # Loki
+            - from: []  # Allow from any namespace for monitoring scraping
+              ports:
+              - protocol: TCP
+                port: 8080
+              - protocol: TCP
+                port: 9100
+              - protocol: TCP
+                port: 10254
+            egress:
+            - {}  # Allow all egress for monitoring collection
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-to-monitoring
+            namespace: default
+          spec:
+            podSelector: {}
+            policyTypes:
+            - Egress
+            egress:
+            - to:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: monitoring
+              ports:
+              - protocol: TCP
+                port: 3000
+              - protocol: TCP
+                port: 9090
+        dest: "/home/{{ ansible_user }}/network-policies-monitoring.yaml"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    - name: Create ArgoCD namespace network policies
+      copy:
+        content: |
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-argocd-server
+            namespace: argocd
+          spec:
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: argocd-server
+            policyTypes:
+            - Ingress
+            - Egress
+            ingress:
+            - from: []  # Allow from any source for GitOps access
+              ports:
+              - protocol: TCP
+                port: 8080
+              - protocol: TCP
+                port: 8083
+            egress:
+            - {}  # Allow all egress for Git repository access
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-argocd-internal
+            namespace: argocd
+          spec:
+            podSelector: {}
+            policyTypes:
+            - Ingress
+            - Egress
+            ingress:
+            - from:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: argocd
+            egress:
+            - to:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: argocd
+            - to: {}  # Allow egress to manage cluster resources
+        dest: "/home/{{ ansible_user }}/network-policies-argocd.yaml"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    - name: Create Linkerd service mesh network policies
+      copy:
+        content: |
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-linkerd-control-plane
+            namespace: linkerd
+          spec:
+            podSelector: {}
+            policyTypes:
+            - Ingress
+            - Egress
+            ingress:
+            - from: []  # Allow all ingress for service mesh operation
+            egress:
+            - {}  # Allow all egress for service mesh operation
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-linkerd-viz
+            namespace: linkerd-viz
+          spec:
+            podSelector: {}
+            policyTypes:
+            - Ingress
+            - Egress
+            ingress:
+            - from: []
+              ports:
+              - protocol: TCP
+                port: 8084  # Linkerd dashboard
+              - protocol: TCP
+                port: 8086  # Grafana
+            egress:
+            - to:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: linkerd
+            - to: {}  # Allow egress for metrics collection
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-linkerd-proxy-traffic
+            namespace: default
+          spec:
+            podSelector:
+              matchLabels:
+                linkerd.io/proxy-deployment: running
+            policyTypes:
+            - Ingress
+            - Egress
+            ingress:
+            - from:
+              - podSelector:
+                  matchLabels:
+                    linkerd.io/proxy-deployment: running
+              ports:
+              - protocol: TCP
+                port: 4140  # Linkerd proxy outbound
+              - protocol: TCP
+                port: 4143  # Linkerd proxy inbound
+            egress:
+            - to:
+              - podSelector:
+                  matchLabels:
+                    linkerd.io/proxy-deployment: running
+            - to:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: linkerd
+        dest: "/home/{{ ansible_user }}/network-policies-linkerd.yaml"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    - name: Create Longhorn storage network policies
+      copy:
+        content: |
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-longhorn-system
+            namespace: longhorn-system
+          spec:
+            podSelector: {}
+            policyTypes:
+            - Ingress
+            - Egress
+            ingress:
+            - from:
+              - namespaceSelector: {}  # Allow from all namespaces for storage access
+              ports:
+              - protocol: TCP
+                port: 9500  # Longhorn manager
+              - protocol: TCP
+                port: 9501  # Longhorn manager
+              - protocol: TCP
+                port: 9502  # Longhorn manager
+            - from: []
+              ports:
+              - protocol: TCP
+                port: 8000  # Longhorn UI
+            egress:
+            - {}  # Allow all egress for storage operations
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-to-longhorn-storage
+            namespace: default
+          spec:
+            podSelector: {}
+            policyTypes:
+            - Egress
+            egress:
+            - to:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: longhorn-system
+              ports:
+              - protocol: TCP
+                port: 9500
+              - protocol: TCP
+                port: 9501
+              - protocol: TCP
+                port: 9502
+        dest: "/home/{{ ansible_user }}/network-policies-longhorn.yaml"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    - name: Create Pod Security Standards enforcement
+      copy:
+        content: |
+          ---
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: secure-workloads
+            labels:
+              pod-security.kubernetes.io/enforce: restricted
+              pod-security.kubernetes.io/audit: restricted
+              pod-security.kubernetes.io/warn: restricted
+          ---
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: baseline-workloads
+            labels:
+              pod-security.kubernetes.io/enforce: baseline
+              pod-security.kubernetes.io/audit: baseline
+              pod-security.kubernetes.io/warn: baseline
+          ---
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: privileged-workloads
+            labels:
+              pod-security.kubernetes.io/enforce: privileged
+              pod-security.kubernetes.io/audit: privileged
+              pod-security.kubernetes.io/warn: privileged
+        dest: "/home/{{ ansible_user }}/pod-security-namespaces.yaml"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    - name: Add namespace labels for network policy selectors
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ item.name }}"
+        state: present
+        definition:
+          metadata:
+            labels:
+              name: "{{ item.name }}"
+              kubernetes.io/metadata.name: "{{ item.name }}"
+        kubeconfig: "/home/{{ ansible_user }}/.kube/config"
+      loop:
+        - {name: "default"}
+        - {name: "kube-system"}
+        - {name: "monitoring"}
+        - {name: "argocd"}
+        - {name: "linkerd"}
+        - {name: "linkerd-viz"}
+        - {name: "longhorn-system"}
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Create security policy application script
+      copy:
+        content: |
+          #!/bin/bash
+          
+          # Security Policy Application Script
+          # Apply network policies and security controls to the cluster
+          
+          set -e
+          
+          echo "🔒 Applying Kubernetes Security Policies..."
+          echo ""
+          
+          # Function to apply policies with error handling
+          apply_policies() {
+              local file=$1
+              local description=$2
+              
+              echo "📋 Applying $description..."
+              if kubectl apply -f "$file"; then
+                  echo "✅ $description applied successfully"
+              else
+                  echo "❌ Failed to apply $description"
+                  return 1
+              fi
+              echo ""
+          }
+          
+          # Apply Pod Security Standards namespaces
+          apply_policies "pod-security-namespaces.yaml" "Pod Security Standards namespaces"
+          
+          # Apply network policies
+          apply_policies "network-policies-kube-system.yaml" "kube-system network policies"
+          apply_policies "network-policies-monitoring.yaml" "monitoring network policies" 
+          apply_policies "network-policies-argocd.yaml" "ArgoCD network policies"
+          apply_policies "network-policies-linkerd.yaml" "Linkerd service mesh network policies"
+          apply_policies "network-policies-longhorn.yaml" "Longhorn storage network policies"
+          
+          # Apply default policies last (they are restrictive)
+          echo "⚠️  Applying restrictive default policies..."
+          echo "   This will deny all traffic by default in the default namespace"
+          read -p "   Continue? (y/N): " -r
+          if [[ $REPLY =~ ^[Yy]$ ]]; then
+              apply_policies "network-policies-default.yaml" "default namespace restrictive policies"
+          else
+              echo "⏭️  Skipped default restrictive policies"
+          fi
+          
+          echo "🔒 Security policy application completed!"
+          echo ""
+          echo "📊 Verify policies:"
+          echo "   kubectl get networkpolicies -A"
+          echo "   kubectl get namespaces --show-labels"
+          echo ""
+          echo "🧪 Test network connectivity:"
+          echo "   kubectl run test-pod --image=busybox --rm -it -- wget -qO- http://kubernetes.default.svc:443"
+        dest: "/home/{{ ansible_user }}/apply-security-policies.sh"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+
+    - name: Display security policies installation summary
+      debug:
+        msg:
+          - "================================="
+          - "🔒 SECURITY POLICIES READY!"
+          - "================================="
+          - ""
+          - "✅ Network policy templates created"
+          - "✅ Pod Security Standards namespaces defined"
+          - "✅ Service mesh security configurations"
+          - "✅ Application script for policy deployment"
+          - ""
+          - "📂 Security Policy Files:"
+          - "  ~/network-policies-*.yaml - Network policies for each namespace"
+          - "  ~/pod-security-namespaces.yaml - Pod Security Standards"
+          - "  ~/apply-security-policies.sh - Application script"
+          - ""
+          - "🚀 Apply Security Policies:"
+          - "  cd ~/ && ./apply-security-policies.sh"
+          - ""
+          - "📋 Available Security Levels:"
+          - "  • secure-workloads - Restricted Pod Security (most secure)"
+          - "  • baseline-workloads - Baseline Pod Security (moderate)"
+          - "  • privileged-workloads - Privileged Pod Security (least restrictive)"
+          - ""
+          - "🔍 Verify Network Policies:"
+          - "  kubectl get networkpolicies -A"
+          - "  kubectl describe networkpolicy -n <namespace>"
+          - ""
+          - "⚠️  Note: Default policies are restrictive!"
+          - "   They deny all traffic by default in the default namespace"
+          - "   Apply them only after testing other policies work correctly"
+      run_once: true
+
+    - name: Clean up temporary files
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "/tmp/security-policies.yaml"
