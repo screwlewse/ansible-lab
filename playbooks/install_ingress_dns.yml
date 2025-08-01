@@ -1,0 +1,940 @@
+---
+- name: Install Ingress Controller and DNS Management
+  hosts: all
+  become: true
+  vars_files:
+    - ../group_vars/all.yml
+
+  vars:
+    ingress_namespace: "ingress-system"
+    external_dns_namespace: "external-dns"
+    
+  tasks:
+    - name: Create ingress system namespace
+      kubernetes.core.k8s:
+        name: "{{ ingress_namespace }}"
+        api_version: v1
+        kind: Namespace
+        state: present
+        kubeconfig: "/home/{{ ansible_user }}/.kube/config"
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Create external DNS namespace
+      kubernetes.core.k8s:
+        name: "{{ external_dns_namespace }}"
+        api_version: v1
+        kind: Namespace
+        state: present
+        kubeconfig: "/home/{{ ansible_user }}/.kube/config"
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Add NGINX Ingress Controller Helm repository
+      kubernetes.core.helm_repository:
+        name: ingress-nginx
+        repo_url: https://kubernetes.github.io/ingress-nginx
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Add External DNS Helm repository
+      kubernetes.core.helm_repository:
+        name: external-dns
+        repo_url: https://kubernetes-sigs.github.io/external-dns/
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Update Helm repositories
+      kubernetes.core.helm:
+        name: dummy
+        chart_ref: ingress-nginx/ingress-nginx
+        state: absent
+        update_repo_cache: true
+      become_user: "{{ ansible_user }}"
+      run_once: true
+      failed_when: false
+
+    - name: Create NGINX Ingress Controller values file
+      copy:
+        content: |
+          # NGINX Ingress Controller configuration for homelab
+          
+          controller:
+            # Use NodePort for homelab (no cloud LoadBalancer)
+            service:
+              type: NodePort
+              nodePorts:
+                http: 30080
+                https: 30443
+            
+            # Resource limits for homelab
+            resources:
+              requests:
+                cpu: 100m
+                memory: 90Mi
+              limits:
+                cpu: 500m
+                memory: 256Mi
+                
+            # Metrics and monitoring
+            metrics:
+              enabled: true
+              serviceMonitor:
+                enabled: true
+                namespace: monitoring
+                
+            # Additional configuration
+            config:
+              # Improve performance
+              worker-processes: "2"
+              worker-connections: "1024"
+              # Security headers
+              add-headers: "ingress-system/custom-headers"
+              # Client body size
+              proxy-body-size: "50m"
+              # Timeouts
+              proxy-connect-timeout: "15"
+              proxy-send-timeout: "600"
+              proxy-read-timeout: "600"
+              
+            # Pod disruption budget
+            podDisruptionBudget:
+              enabled: false  # Disable for single replica homelab
+              
+            # Replica count
+            replicaCount: 1
+            
+            # Node selector (optional - can run on any node)
+            nodeSelector:
+              kubernetes.io/os: linux
+              
+            # Admission webhooks
+            admissionWebhooks:
+              enabled: true
+              failurePolicy: Fail
+              
+          # Default backend
+          defaultBackend:
+            enabled: true
+            image:
+              repository: registry.k8s.io/defaultbackend-amd64
+              tag: "1.5"
+            resources:
+              requests:
+                cpu: 10m
+                memory: 20Mi
+              limits:
+                cpu: 50m
+                memory: 40Mi
+        dest: "/tmp/nginx-ingress-values.yaml"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    - name: Create custom headers ConfigMap for security
+      copy:
+        content: |
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: custom-headers
+            namespace: {{ ingress_namespace }}
+          data:
+            # Security headers
+            X-Frame-Options: "SAMEORIGIN"
+            X-Content-Type-Options: "nosniff"
+            X-XSS-Protection: "1; mode=block"
+            Referrer-Policy: "strict-origin-when-cross-origin"
+            # Remove server information
+            Server: "homelab-ingress"
+        dest: "/home/{{ ansible_user }}/custom-headers-configmap.yaml"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    - name: Apply custom headers ConfigMap
+      kubernetes.core.k8s:
+        state: present
+        src: "/home/{{ ansible_user }}/custom-headers-configmap.yaml"
+        kubeconfig: "/home/{{ ansible_user }}/.kube/config"
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Install NGINX Ingress Controller
+      kubernetes.core.helm:
+        name: ingress-nginx
+        chart_ref: ingress-nginx/ingress-nginx
+        release_namespace: "{{ ingress_namespace }}"
+        create_namespace: true
+        values_files:
+          - "/tmp/nginx-ingress-values.yaml"
+        wait: true
+        wait_timeout: 600s
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Create External DNS configuration (CloudFlare example)
+      copy:
+        content: |
+          # External DNS configuration for homelab
+          # Note: This example uses CloudFlare - modify for your DNS provider
+          
+          # Service account
+          serviceAccount:
+            create: true
+            name: external-dns
+            
+          # RBAC
+          rbac:
+            create: true
+            
+          # Resource limits
+          resources:
+            requests:
+              cpu: 50m
+              memory: 50Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+              
+          # Configuration
+          sources:
+            - ingress
+            - service
+            
+          provider: cloudflare
+          
+          # Domain filter (replace with your domain)
+          domainFilters:
+            - "homelab.local"  # Replace with your actual domain
+            
+          # CloudFlare configuration
+          # You need to create a secret with your CloudFlare API token:
+          # kubectl create secret generic cloudflare-api-token \
+          #   --from-literal=api-token=YOUR_CLOUDFLARE_API_TOKEN \
+          #   -n external-dns
+          env:
+            - name: CF_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: cloudflare-api-token
+                  key: api-token
+                  
+          # Sync policy
+          policy: sync  # Use 'upsert-only' for safer operation
+          
+          # Registry
+          registry: txt
+          txtOwnerId: "homelab-cluster"
+          
+          # Interval
+          interval: "1m"
+          
+          # Log configuration
+          logLevel: info
+          logFormat: text
+          
+          # Additional options
+          extraArgs:
+            - --txt-prefix=homelab.
+            - --annotation-filter=external-dns.alpha.kubernetes.io/hostname
+        dest: "/tmp/external-dns-values.yaml"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    - name: Create External DNS setup script
+      copy:
+        content: |
+          #!/bin/bash
+          
+          # External DNS Setup Script for Various Providers
+          
+          set -e
+          
+          echo "🌐 External DNS Setup for Homelab"
+          echo "================================="
+          echo ""
+          
+          echo "External DNS automatically creates DNS records for your Kubernetes services."
+          echo "This is useful for accessing services via custom domain names."  
+          echo ""
+          
+          echo "📋 Supported DNS Providers:"
+          echo "1. CloudFlare"
+          echo "2. AWS Route53"
+          echo "3. Google Cloud DNS"
+          echo "4. Pi-hole (local DNS)"
+          echo "5. CoreDNS (cluster DNS)"
+          echo "6. Skip External DNS setup"
+          echo ""
+          
+          read -p "Select your DNS provider (1-6): " -r PROVIDER_CHOICE
+          echo ""
+          
+          case $PROVIDER_CHOICE in
+              1)
+                  echo "🌩️  CloudFlare Setup"
+                  echo "==================="
+                  echo ""
+                  echo "1. Get your CloudFlare API token:"
+                  echo "   - Go to https://dash.cloudflare.com/profile/api-tokens"
+                  echo "   - Create token with Zone:Read, DNS:Edit permissions"
+                  echo ""
+                  read -p "Enter your CloudFlare API token: " -r CF_TOKEN
+                  read -p "Enter your domain (e.g., example.com): " -r DOMAIN
+                  
+                  # Create CloudFlare secret
+                  kubectl create secret generic cloudflare-api-token \
+                      --from-literal=api-token="$CF_TOKEN" \
+                      -n external-dns --dry-run=client -o yaml | kubectl apply -f -
+                  
+                  # Update values file
+                  sed -i "s/homelab.local/$DOMAIN/g" /tmp/external-dns-values.yaml
+                  
+                  echo "✅ CloudFlare configuration ready"
+                  ;;
+              2)
+                  echo "☁️  AWS Route53 Setup"
+                  echo "===================="
+                  echo ""
+                  echo "You need AWS credentials with Route53 permissions."
+                  echo "Create an IAM user with Route53FullAccess policy."
+                  echo ""
+                  read -p "Enter AWS Access Key ID: " -r AWS_ACCESS_KEY
+                  read -p "Enter AWS Secret Access Key: " -r AWS_SECRET_KEY
+                  read -p "Enter your domain (hosted zone): " -r DOMAIN
+                  
+                  # Create AWS secret
+                  kubectl create secret generic aws-credentials \
+                      --from-literal=access-key-id="$AWS_ACCESS_KEY" \
+                      --from-literal=secret-access-key="$AWS_SECRET_KEY" \
+                      -n external-dns --dry-run=client -o yaml | kubectl apply -f -
+                  
+                  # Create Route53 values file
+                  cat > /tmp/external-dns-route53-values.yaml <<EOF
+          provider: aws
+          aws:
+            region: us-east-1
+            credentials:
+              secretName: aws-credentials
+              accessKeyIdSecretKey: access-key-id
+              secretAccessKeySecretKey: secret-access-key
+          domainFilters:
+            - "$DOMAIN"
+          sources:
+            - ingress
+            - service
+          policy: sync
+          registry: txt
+          txtOwnerId: "homelab-cluster"
+          interval: "1m"
+          logLevel: info
+          EOF
+                  
+                  echo "✅ AWS Route53 configuration ready"
+                  ;;
+              3)
+                  echo "🌍 Google Cloud DNS Setup"
+                  echo "========================="
+                  echo ""
+                  echo "You need a Google Cloud service account key with DNS Admin role."
+                  echo ""
+                  read -p "Enter path to service account JSON key: " -r GCP_KEY_PATH
+                  read -p "Enter your GCP project ID: " -r GCP_PROJECT
+                  read -p "Enter your domain (managed zone): " -r DOMAIN
+                  
+                  # Create GCP secret
+                  kubectl create secret generic google-service-account \
+                      --from-file=key.json="$GCP_KEY_PATH" \
+                      -n external-dns --dry-run=client -o yaml | kubectl apply -f -
+                  
+                  # Create GCP values file
+                  cat > /tmp/external-dns-gcp-values.yaml <<EOF
+          provider: google
+          google:
+            project: "$GCP_PROJECT"
+            serviceAccountSecretKey: key.json
+            serviceAccountSecret: google-service-account
+          domainFilters:
+            - "$DOMAIN"
+          sources:
+            - ingress
+            - service
+          policy: sync
+          registry: txt
+          txtOwnerId: "homelab-cluster"
+          interval: "1m"
+          logLevel: info
+          EOF
+                  
+                  echo "✅ Google Cloud DNS configuration ready"
+                  ;;
+              4)
+                  echo "🥧 Pi-hole Local DNS Setup"
+                  echo "=========================="
+                  echo ""
+                  echo "Pi-hole integration requires the Pi-hole External DNS provider."
+                  echo "This setup creates local DNS records in your Pi-hole instance."
+                  echo ""
+                  read -p "Enter Pi-hole server IP: " -r PIHOLE_IP
+                  read -p "Enter Pi-hole admin password: " -r PIHOLE_PASSWORD
+                  read -p "Enter local domain (e.g., homelab.local): " -r LOCAL_DOMAIN
+                  
+                  # Create Pi-hole secret
+                  kubectl create secret generic pihole-password \
+                      --from-literal=password="$PIHOLE_PASSWORD" \
+                      -n external-dns --dry-run=client -o yaml | kubectl apply -f -
+                  
+                  # Create Pi-hole values file
+                  cat > /tmp/external-dns-pihole-values.yaml <<EOF
+          provider: pihole
+          extraArgs:
+            - --pihole-server=http://$PIHOLE_IP
+          env:
+            - name: EXTERNAL_DNS_PIHOLE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pihole-password
+                  key: password
+          domainFilters:
+            - "$LOCAL_DOMAIN"
+          sources:
+            - ingress
+            - service
+          policy: sync
+          registry: txt
+          txtOwnerId: "homelab-cluster"
+          interval: "1m"
+          logLevel: info
+          EOF
+                  
+                  echo "✅ Pi-hole configuration ready"
+                  echo "Note: Make sure Pi-hole API is enabled and accessible"
+                  ;;
+              5)
+                  echo "🏠 CoreDNS Cluster Setup"
+                  echo "======================="
+                  echo ""
+                  echo "CoreDNS integration adds local cluster DNS resolution."
+                  echo "This is useful for internal service discovery."
+                  echo ""
+                  read -p "Enter cluster domain (e.g., cluster.local): " -r CLUSTER_DOMAIN
+                  
+                  # Create CoreDNS values file
+                  cat > /tmp/external-dns-coredns-values.yaml <<EOF
+          provider: coredns
+          extraArgs:
+            - --coredns-prefix=/skydns/
+          domainFilters:
+            - "$CLUSTER_DOMAIN"
+          sources:
+            - ingress
+            - service
+          policy: sync
+          registry: txt
+          txtOwnerId: "homelab-cluster"
+          interval: "1m"
+          logLevel: info
+          EOF
+                  
+                  echo "✅ CoreDNS configuration ready"
+                  ;;
+              6)
+                  echo "⏭️  Skipping External DNS installation"
+                  echo "You can set it up manually later using the values files."
+                  exit 0
+                  ;;
+              *)
+                  echo "❌ Invalid choice: $PROVIDER_CHOICE"
+                  exit 1
+                  ;;
+          esac
+          
+          echo ""
+          echo "🚀 Installing External DNS..."
+          
+          # Install External DNS with the appropriate values file
+          VALUES_FILE=""
+          case $PROVIDER_CHOICE in
+              1) VALUES_FILE="/tmp/external-dns-values.yaml" ;;
+              2) VALUES_FILE="/tmp/external-dns-route53-values.yaml" ;;
+              3) VALUES_FILE="/tmp/external-dns-gcp-values.yaml" ;;
+              4) VALUES_FILE="/tmp/external-dns-pihole-values.yaml" ;;
+              5) VALUES_FILE="/tmp/external-dns-coredns-values.yaml" ;;
+          esac
+          
+          helm upgrade --install external-dns external-dns/external-dns \
+              --namespace external-dns \
+              --create-namespace \
+              --values "$VALUES_FILE" \
+              --wait --timeout=300s
+          
+          echo ""
+          echo "✅ External DNS installed successfully!"
+          echo ""
+          echo "🧪 Test DNS automation:"
+          echo "1. Create an ingress with a hostname annotation"
+          echo "2. Watch external-dns logs: kubectl logs -n external-dns -l app.kubernetes.io/name=external-dns -f"
+          echo "3. Check your DNS provider for new records"
+          echo ""
+          echo "📋 Example ingress with DNS:"
+          echo "---"
+          echo "apiVersion: networking.k8s.io/v1"
+          echo "kind: Ingress"
+          echo "metadata:"
+          echo "  name: example-app"
+          echo "  annotations:"
+          echo "    external-dns.alpha.kubernetes.io/hostname: app.$DOMAIN"
+          echo "spec:"
+          echo "  rules:"
+          echo "  - host: app.$DOMAIN"
+          echo "    http:"
+          echo "      paths:"
+          echo "      - path: /"
+          echo "        pathType: Prefix"
+          echo "        backend:"
+          echo "          service:"
+          echo "            name: example-service"
+          echo "            port:"
+          echo "              number: 80"
+        dest: "/home/{{ ansible_user }}/setup-external-dns.sh"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+
+    - name: Create ingress examples and templates
+      copy:
+        content: |
+          # Sample Ingress Configurations for Homelab Services
+          
+          ---
+          # Basic HTTP ingress for a web application
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: webapp-ingress
+            namespace: default
+            annotations:
+              nginx.ingress.kubernetes.io/rewrite-target: /
+              external-dns.alpha.kubernetes.io/hostname: webapp.homelab.local
+          spec:
+            ingressClassName: nginx
+            rules:
+            - host: webapp.homelab.local
+              http:
+                paths:
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: webapp-service
+                      port:
+                        number: 80
+          
+          ---
+          # HTTPS ingress with TLS termination
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: secure-webapp-ingress
+            namespace: default
+            annotations:
+              nginx.ingress.kubernetes.io/ssl-redirect: "true"
+              nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+              cert-manager.io/cluster-issuer: "letsencrypt-prod"
+              external-dns.alpha.kubernetes.io/hostname: secure.homelab.local
+          spec:
+            ingressClassName: nginx
+            tls:
+            - hosts:
+              - secure.homelab.local
+              secretName: secure-webapp-tls
+            rules:
+            - host: secure.homelab.local
+              http:
+                paths:
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: webapp-service
+                      port:
+                        number: 80
+          
+          ---
+          # Multi-service ingress with path-based routing
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: multi-service-ingress
+            namespace: default
+            annotations:
+              nginx.ingress.kubernetes.io/rewrite-target: /$2
+              external-dns.alpha.kubernetes.io/hostname: services.homelab.local
+          spec:
+            ingressClassName: nginx
+            rules:
+            - host: services.homelab.local
+              http:
+                paths:
+                - path: /api(/|$)(.*)
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: api-service
+                      port:
+                        number: 8080
+                - path: /web(/|$)(.*)
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: web-service
+                      port:
+                        number: 80
+                - path: /docs(/|$)(.*)
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: docs-service
+                      port:
+                        number: 3000
+          
+          ---
+          # Grafana ingress (monitoring)
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: grafana-ingress
+            namespace: monitoring
+            annotations:
+              nginx.ingress.kubernetes.io/auth-type: basic
+              nginx.ingress.kubernetes.io/auth-secret: basic-auth
+              external-dns.alpha.kubernetes.io/hostname: grafana.homelab.local
+          spec:
+            ingressClassName: nginx
+            rules:
+            - host: grafana.homelab.local
+              http:
+                paths:
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: grafana
+                      port:
+                        number: 80
+          
+          ---
+          # ArgoCD ingress (GitOps)
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: argocd-server-ingress
+            namespace: argocd
+            annotations:
+              nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+              nginx.ingress.kubernetes.io/server-snippet: |
+                grpc_read_timeout 300;
+                grpc_send_timeout 300;
+              external-dns.alpha.kubernetes.io/hostname: argocd.homelab.local
+          spec:
+            ingressClassName: nginx
+            rules:
+            - host: argocd.homelab.local
+              http:
+                paths:
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: argocd-server
+                      port:
+                        number: 80
+          
+          ---
+          # Longhorn storage UI ingress
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: longhorn-ingress
+            namespace: longhorn-system
+            annotations:
+              nginx.ingress.kubernetes.io/auth-type: basic
+              nginx.ingress.kubernetes.io/auth-secret: basic-auth
+              external-dns.alpha.kubernetes.io/hostname: longhorn.homelab.local
+          spec:
+            ingressClassName: nginx
+            rules:
+            - host: longhorn.homelab.local
+              http:
+                paths:
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: longhorn-frontend
+                      port:
+                        number: 80
+        dest: "/home/{{ ansible_user }}/ingress-examples.yaml"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    - name: Create ingress management script
+      copy:
+        content: |
+          #!/bin/bash
+          
+          # Ingress Management Script for Homelab
+          
+          set -e
+          
+          echo "🌐 Ingress Controller Management"
+          echo "================================"
+          echo ""
+          
+          # Function to check ingress controller status
+          check_ingress_status() {
+              echo "🔍 Checking NGINX Ingress Controller status..."
+              
+              if kubectl get pods -n ingress-system -l app.kubernetes.io/name=ingress-nginx --no-headers 2>/dev/null | grep -q "Running"; then
+                  echo "✅ NGINX Ingress Controller is running"
+                  
+                  # Get NodePort information
+                  HTTP_PORT=$(kubectl get svc -n ingress-system ingress-nginx-controller -o jsonpath='{.spec.ports[?(@.name=="http")].nodePort}')
+                  HTTPS_PORT=$(kubectl get svc -n ingress-system ingress-nginx-controller -o jsonpath='{.spec.ports[?(@.name=="https")].nodePort}')
+                  NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+                  
+                  echo "📡 Access Information:"
+                  echo "   HTTP:  http://$NODE_IP:$HTTP_PORT"
+                  echo "   HTTPS: https://$NODE_IP:$HTTPS_PORT"
+                  echo ""
+                  
+                  return 0
+              else
+                  echo "❌ NGINX Ingress Controller is not running"
+                  return 1
+              fi
+          }
+          
+          # Function to list all ingresses
+          list_ingresses() {
+              echo "📋 Current Ingress Resources:"
+              echo ""
+              kubectl get ingress -A -o wide
+              echo ""
+          }
+          
+          # Function to test ingress connectivity
+          test_ingress() {
+              local hostname=$1
+              local path=${2:-"/"}
+              local node_ip=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+              local http_port=$(kubectl get svc -n ingress-system ingress-nginx-controller -o jsonpath='{.spec.ports[?(@.name=="http")].nodePort}')
+              
+              echo "🧪 Testing ingress connectivity..."
+              echo "   Target: $hostname$path"
+              echo "   Via: $node_ip:$http_port"
+              echo ""
+              
+              if curl -s -H "Host: $hostname" "http://$node_ip:$http_port$path" >/dev/null; then
+                  echo "✅ Ingress is responding"
+              else
+                  echo "❌ Ingress is not responding"
+                  echo "💡 Troubleshooting tips:"
+                  echo "   1. Check if the backend service exists"
+                  echo "   2. Verify ingress resource configuration"
+                  echo "   3. Check ingress controller logs"
+              fi
+              echo ""
+          }
+          
+          # Function to show ingress logs
+          show_logs() {
+              echo "📜 NGINX Ingress Controller Logs:"
+              echo "================================"
+              kubectl logs -n ingress-system -l app.kubernetes.io/name=ingress-nginx --tail=50 -f
+          }
+          
+          # Function to create basic auth secret
+          create_basic_auth() {
+              local username=$1
+              local password=$2
+              local namespace=${3:-"default"}
+              
+              echo "🔐 Creating basic auth secret..."
+              
+              htpasswd -cb auth "$username" "$password"
+              kubectl create secret generic basic-auth --from-file=auth -n "$namespace" --dry-run=client -o yaml | kubectl apply -f -
+              rm auth
+              
+              echo "✅ Basic auth secret created in namespace: $namespace"
+              echo "💡 Use this annotation in your ingress:"
+              echo "   nginx.ingress.kubernetes.io/auth-type: basic"
+              echo "   nginx.ingress.kubernetes.io/auth-secret: basic-auth"
+              echo ""
+          }
+          
+          # Function to apply example ingresses
+          apply_examples() {
+              echo "📋 Applying example ingress resources..."
+              echo ""
+              echo "⚠️  Note: These examples use 'homelab.local' domain."
+              echo "   Make sure to update DNS or add entries to /etc/hosts"
+              echo ""
+              read -p "Continue with applying examples? (y/N): " -r
+              if [[ $REPLY =~ ^[Yy]$ ]]; then
+                  kubectl apply -f ingress-examples.yaml
+                  echo "✅ Example ingresses applied"
+                  echo ""
+                  echo "📝 Add these entries to your /etc/hosts file:"
+                  NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+                  echo "   $NODE_IP webapp.homelab.local"
+                  echo "   $NODE_IP secure.homelab.local"
+                  echo "   $NODE_IP services.homelab.local"
+                  echo "   $NODE_IP grafana.homelab.local"
+                  echo "   $NODE_IP argocd.homelab.local"
+                  echo "   $NODE_IP longhorn.homelab.local"
+              else
+                  echo "Skipped applying examples"
+              fi
+              echo ""
+          }
+          
+          # Main menu
+          echo "Select an option:"
+          echo "1. Check ingress controller status"
+          echo "2. List all ingress resources"
+          echo "3. Test ingress connectivity"
+          echo "4. View ingress controller logs"
+          echo "5. Create basic auth secret"
+          echo "6. Apply example ingresses"
+          echo "7. Setup External DNS"
+          echo "8. Exit"
+          echo ""
+          
+          read -p "Enter choice (1-8): " -r CHOICE
+          echo ""
+          
+          case $CHOICE in
+              1)
+                  check_ingress_status
+                  ;;
+              2)
+                  list_ingresses
+                  ;;
+              3)
+                  read -p "Enter hostname to test: " -r HOSTNAME
+                  read -p "Enter path (default /): " -r PATH
+                  test_ingress "$HOSTNAME" "${PATH:-/}"
+                  ;;
+              4)
+                  show_logs
+                  ;;
+              5)
+                  read -p "Enter username: " -r USERNAME
+                  read -p "Enter password: " -s PASSWORD
+                  echo ""
+                  read -p "Enter namespace (default: default): " -r NAMESPACE
+                  create_basic_auth "$USERNAME" "$PASSWORD" "${NAMESPACE:-default}"
+                  ;;
+              6)
+                  apply_examples
+                  ;;
+              7)
+                  ./setup-external-dns.sh
+                  ;;
+              8)
+                  echo "👋 Goodbye!"
+                  exit 0
+                  ;;
+              *)
+                  echo "❌ Invalid choice: $CHOICE"
+                  exit 1
+                  ;;
+          esac
+        dest: "/home/{{ ansible_user }}/manage-ingress.sh"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+
+    - name: Wait for NGINX Ingress Controller to be ready
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ ingress_namespace }}"
+        label_selectors:
+          - app.kubernetes.io/name=ingress-nginx
+        wait: true
+        wait_condition:
+          type: Ready
+          status: "True"
+        wait_timeout: 600
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Get ingress controller service information
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Service
+        namespace: "{{ ingress_namespace }}"
+        name: ingress-nginx-controller
+      become_user: "{{ ansible_user }}"
+      register: ingress_service
+      run_once: true
+
+    - name: Display ingress and DNS installation summary
+      debug:
+        msg:
+          - "================================="
+          - "🌐 INGRESS & DNS READY!"
+          - "================================="
+          - ""
+          - "✅ NGINX Ingress Controller deployed"
+          - "✅ External DNS configuration templates created"
+          - "✅ Ingress examples and management tools ready"
+          - "✅ Security headers and custom configuration applied"
+          - ""
+          - "🌐 NGINX Ingress Controller Access:"
+          - "  HTTP Port: {{ ingress_service.resources[0].spec.ports | selectattr('name', 'equalto', 'http') | map(attribute='nodePort') | first | default('30080') }}"
+          - "  HTTPS Port: {{ ingress_service.resources[0].spec.ports | selectattr('name', 'equalto', 'https') | map(attribute='nodePort') | first | default('30443') }}"
+          - "  Node IP: {{ ansible_default_ipv4.address }}"
+          - ""
+          - "🔧 Management Scripts:"
+          - "  ~/manage-ingress.sh         # Interactive ingress management"
+          - "  ~/setup-external-dns.sh     # External DNS provider setup"
+          - ""
+          - "📂 Configuration Files:"
+          - "  ~/ingress-examples.yaml     # Sample ingress configurations"
+          - "  ~/custom-headers-configmap.yaml  # Security headers"
+          - ""
+          - "🚀 Next Steps:"
+          - "1. Setup External DNS (optional):"
+          - "   ~/setup-external-dns.sh"
+          - ""
+          - "2. Create ingress resources for your services:"
+          - "   kubectl apply -f ingress-examples.yaml"
+          - ""
+          - "3. For local testing, add to /etc/hosts:"
+          - "   {{ ansible_default_ipv4.address }} your-app.homelab.local"
+          - ""
+          - "📊 Monitoring Integration:"
+          - "  • Ingress metrics available in Prometheus"
+          - "  • ServiceMonitor created for Grafana dashboards"
+          - "  • Access logs available via kubectl logs"
+          - ""
+          - "🔒 Security Features:"
+          - "  • Custom security headers applied"
+          - "  • Basic auth support available"
+          - "  • SSL/TLS termination ready"
+          - "  • Rate limiting and WAF capabilities"
+      run_once: true
+
+    - name: Clean up temporary files
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "/tmp/nginx-ingress-values.yaml"
+        - "/tmp/external-dns-values.yaml"

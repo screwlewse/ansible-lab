@@ -128,10 +128,12 @@ echo "   1. GitOps (ArgoCD) - Recommended first"
 echo "   2. Monitoring Stack (Grafana + Prometheus)"
 echo "   3. Service Mesh (Linkerd)"
 echo "   4. Security Policies (Network Policies + mTLS)"
-echo "   5. All Components"
+echo "   5. Cluster Management Tools (Dashboards & Visualization)"
+echo "   6. Ingress & DNS Management (NGINX + External DNS)"
+echo "   7. All Components"
 echo ""
 
-read -p "Select installation option (1-5): " -n 1 -r OPTION
+read -p "Select installation option (1-7): " -n 1 -r OPTION
 echo
 echo
 
@@ -157,6 +159,14 @@ case $OPTION in
         ansible-playbook -i "$INVENTORY_FILE" playbooks/configure_mtls_automation.yml
         ;;
     5)
+        echo "🏛️ Installing Cluster Management Tools..."
+        ansible-playbook -i "$INVENTORY_FILE" playbooks/install_cluster_management_tools.yml
+        ;;
+    6)
+        echo "🌐 Installing Ingress & DNS Management..."
+        ansible-playbook -i "$INVENTORY_FILE" playbooks/install_ingress_dns.yml
+        ;;
+    7)
         echo "🚀 Installing All Enterprise Components..."
         echo ""
         echo "Phase 1: GitOps Platform"
@@ -176,7 +186,15 @@ case $OPTION in
         ansible-playbook -i "$INVENTORY_FILE" playbooks/configure_mtls_automation.yml
         
         echo ""
-        echo "Phase 5: Additional components can be deployed via ArgoCD"
+        echo "Phase 5: Cluster Management Tools"
+        ansible-playbook -i "$INVENTORY_FILE" playbooks/install_cluster_management_tools.yml
+        
+        echo ""
+        echo "Phase 6: Ingress & DNS Management"
+        ansible-playbook -i "$INVENTORY_FILE" playbooks/install_ingress_dns.yml
+        
+        echo ""
+        echo "Phase 7: Additional components can be deployed via ArgoCD"
         echo "See ~/applications/ directory for available components"
         ;;
     *)
@@ -202,7 +220,7 @@ if [ $? -eq 0 ]; then
     echo "🎛️  Access Your Enterprise Platform:"
     echo ""
     
-    if [[ $OPTION == "1" || $OPTION == "6" ]]; then
+    if [[ $OPTION == "1" || $OPTION == "7" ]]; then
         echo "📋 ArgoCD GitOps Dashboard:"
         echo "   kubectl port-forward -n argocd svc/argocd-server 8080:80"
         echo "   Visit: http://localhost:8080"
@@ -211,7 +229,7 @@ if [ $? -eq 0 ]; then
         echo ""
     fi
     
-    if [[ $OPTION == "2" || $OPTION == "6" ]]; then
+    if [[ $OPTION == "2" || $OPTION == "7" ]]; then
         echo "📊 Grafana Monitoring Dashboard:"
         echo "   kubectl port-forward -n monitoring svc/grafana 3000:80"
         echo "   Visit: http://localhost:3000"
@@ -224,7 +242,7 @@ if [ $? -eq 0 ]; then
         echo ""
     fi
     
-    if [[ $OPTION == "3" || $OPTION == "6" ]]; then
+    if [[ $OPTION == "3" || $OPTION == "7" ]]; then
         echo "🌐 Linkerd Service Mesh Dashboard:"
         echo "   linkerd viz dashboard &"
         echo "   OR"
@@ -233,7 +251,7 @@ if [ $? -eq 0 ]; then
         echo ""
     fi
     
-    if [[ $OPTION == "4" || $OPTION == "6" ]]; then
+    if [[ $OPTION == "4" || $OPTION == "7" ]]; then
         echo "🔒 Security Policy Management:"
         echo "   ~/apply-security-policies.sh  # Apply network policies"
         echo "   ~/manage-mtls.sh              # Configure mTLS automation"
@@ -245,7 +263,7 @@ if [ $? -eq 0 ]; then
         echo ""
     fi
     
-    if [[ $OPTION == "5" || $OPTION == "6" ]]; then
+    if [[ $OPTION == "5" || $OPTION == "7" ]]; then
         echo "🏛️ Cluster Management Tools:"
         echo "   ~/cluster-management.sh       # Interactive tool launcher"
         echo "   ~/install-k9s.sh              # Install K9s terminal dashboard"
@@ -254,6 +272,17 @@ if [ $? -eq 0 ]; then
         echo "🏛️ Dashboard Access:"
         echo "   Skooner: kubectl port-forward -n cluster-management svc/skooner 8080:80"
         echo "   Kubevious: kubectl port-forward -n cluster-management svc/kubevious-frontend-service 8081:3000"
+        echo ""
+    fi
+    
+    if [[ $OPTION == "6" || $OPTION == "7" ]]; then
+        echo "🌐 Ingress & DNS Management:"
+        echo "   ~/manage-ingress.sh           # Interactive ingress management"
+        echo "   ~/setup-external-dns.sh       # External DNS provider setup"
+        echo ""
+        echo "🌐 Access URLs (update DNS or /etc/hosts):"
+        echo "   HTTP Port: 30080, HTTPS Port: 30443"
+        echo "   Example: http://$TARGET_IP:30080 (Host: app.homelab.local)"
         echo ""
     fi
     
