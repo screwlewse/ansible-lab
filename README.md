@@ -4,7 +4,7 @@ Automated setup for transforming fresh Ubuntu installations into production-read
 
 ## Overview
 
-This Ansible-based automation project provides a streamlined 3-step process to convert bare Ubuntu Server installations into fully-configured Kubernetes nodes with Docker and k3s. The platform is designed to host containerized development environments and CI/CD workloads rather than installing tools directly on the host.
+This Ansible-based automation project provides a streamlined 3-step process to convert bare Ubuntu Server installations into fully-configured Kubernetes nodes with Docker, k3s, and Longhorn distributed storage. The platform is designed to host containerized development environments and CI/CD workloads rather than installing tools directly on the host.
 
 ## Quick Start
 
@@ -36,7 +36,8 @@ This Ansible-based automation project provides a streamlined 3-step process to c
 - `playbooks/update_os.yml` - System updates and essential package installation
 - `playbooks/configure_ssh.yml` - SSH security hardening with key-only authentication
 - `playbooks/install_docker.yml` - Docker CE installation and user group configuration
-- `playbooks/install_kubernetes.yml` - k3s setup with DNS and storage addons
+- `playbooks/install_kubernetes.yml` - k3s setup with integrated DNS and storage
+- `playbooks/install_longhorn_storage.yml` - Longhorn distributed storage deployment
 - `playbooks/install_platform_tools.yml` - kubectl, Helm, and essential utilities installation
 - `playbooks/setup_users.yml` - User account creation (davidg, labuser) with proper permissions
 - `playbooks/configure_systems.yml` - System optimization for containers (swap, networking, etc.)
@@ -84,10 +85,13 @@ k3s kubectl get nodes
 
 ### Container Platform
 - **Docker CE** - Industry-standard container runtime
-- **k3s** - Lightweight Kubernetes distribution with addons:
+- **k3s** - Lightweight Kubernetes distribution with:
   - DNS (CoreDNS)
-  - Storage (hostpath-storage)
-  - Dashboard (optional)
+  - Integrated networking
+- **Longhorn** - Enterprise-grade distributed storage with:
+  - High availability and replication
+  - Volume snapshots and backups
+  - Web-based management UI
 
 ### Platform Management Tools
 - **kubectl** - Kubernetes command-line tool

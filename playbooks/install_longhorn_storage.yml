@@ -1,0 +1,274 @@
+---
+- name: Install Longhorn Distributed Storage
+  hosts: all
+  become: true
+  vars_files:
+    - ../group_vars/all.yml
+
+  vars:
+    longhorn_namespace: "longhorn-system"
+    longhorn_version: "v1.5.5"
+    longhorn_chart_version: "1.5.5"
+
+  tasks:
+    - name: Ensure required packages are installed for Longhorn
+      apt:
+        name:
+          - open-iscsi
+          - nfs-common
+          - util-linux
+        state: present
+        update_cache: true
+
+    - name: Start and enable iscsid service
+      systemd:
+        name: iscsid
+        state: started
+        enabled: true
+
+    - name: Create Longhorn namespace
+      kubernetes.core.k8s:
+        name: "{{ longhorn_namespace }}"
+        api_version: v1
+        kind: Namespace
+        state: present
+        kubeconfig: "/home/{{ ansible_user }}/.kube/config"
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Add Longhorn Helm repository
+      kubernetes.core.helm_repository:
+        name: longhorn
+        repo_url: https://charts.longhorn.io
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Update Helm repositories
+      kubernetes.core.helm:
+        name: dummy
+        chart_ref: longhorn/longhorn
+        release_namespace: "{{ longhorn_namespace }}"
+        state: absent
+        update_repo_cache: true
+      become_user: "{{ ansible_user }}"
+      run_once: true
+      failed_when: false
+
+    - name: Create Longhorn values file
+      copy:
+        content: |
+          # Longhorn configuration for ansible-lab
+          persistence:
+            defaultClass: true
+            defaultClassReplicaCount: 1  # Single replica for lab environment
+            reclaimPolicy: Retain
+
+          defaultSettings:
+            defaultReplicaCount: 1
+            guaranteedEngineManagerCPU: 0.1
+            guaranteedReplicaManagerCPU: 0.1
+            createDefaultDiskLabeledNodes: true
+            defaultDataPath: "/var/lib/longhorn/"
+            replicaSoftAntiAffinity: false  # Allow replicas on same node for single-node setups
+            storageOverProvisioningPercentage: 200
+            storageMinimalAvailablePercentage: 25
+            upgradeChecker: false
+            v2DataEngine: false
+
+          # Resource limits for lab environment
+          longhornManager:
+            resources:
+              requests:
+                cpu: 100m
+                memory: 128Mi
+              limits:
+                cpu: 500m
+                memory: 512Mi
+
+          longhornDriver:
+            resources:
+              requests:
+                cpu: 50m
+                memory: 64Mi
+              limits:
+                cpu: 200m
+                memory: 256Mi
+
+          longhornUI:
+            resources:
+              requests:
+                cpu: 50m
+                memory: 64Mi
+              limits:
+                cpu: 200m
+                memory: 256Mi
+
+          # Service configuration
+          service:
+            ui:
+              type: ClusterIP
+              nodePort: null
+
+          # Ingress disabled for internal access only
+          ingress:
+            enabled: false
+
+          # Network policies disabled for lab environment
+          networkPolicies:
+            enabled: false
+            type: "k3s"
+        dest: "/tmp/longhorn-values.yaml"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    - name: Install Longhorn using Helm
+      kubernetes.core.helm:
+        name: longhorn
+        chart_ref: longhorn/longhorn
+        chart_version: "{{ longhorn_chart_version }}"
+        release_namespace: "{{ longhorn_namespace }}"
+        create_namespace: true
+        values_files:
+          - "/tmp/longhorn-values.yaml"
+        wait: true
+        wait_condition:
+          type: Ready
+          status: "True"
+        wait_timeout: 600s
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Wait for Longhorn system pods to be ready
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ longhorn_namespace }}"
+        label_selectors:
+          - app=longhorn-manager
+        wait: true
+        wait_condition:
+          type: Ready
+          status: "True"
+        wait_timeout: 300
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Verify Longhorn storage class is created
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: longhorn
+      become_user: "{{ ansible_user }}"
+      register: longhorn_sc
+      run_once: true
+
+    - name: Set Longhorn as default storage class
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: longhorn
+            annotations:
+              storageclass.kubernetes.io/is-default-class: "true"
+          provisioner: driver.longhorn.io
+          allowVolumeExpansion: true
+          reclaimPolicy: Retain
+          parameters:
+            numberOfReplicas: "1"
+            staleReplicaTimeout: "2880"
+            fromBackup: ""
+            fsType: "ext4"
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Remove local-path as default storage class
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: local-path
+            annotations:
+              storageclass.kubernetes.io/is-default-class: "false"
+          provisioner: rancher.io/local-path
+          reclaimPolicy: Delete
+          volumeBindingMode: WaitForFirstConsumer
+      become_user: "{{ ansible_user }}"
+      run_once: true
+      failed_when: false
+
+    - name: Create test PVC to verify Longhorn functionality
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: longhorn-test-pvc
+            namespace: default
+          spec:
+            accessModes:
+              - ReadWriteOnce
+            storageClassName: longhorn
+            resources:
+              requests:
+                storage: 1Gi
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Wait for test PVC to be bound
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: PersistentVolumeClaim
+        name: longhorn-test-pvc
+        namespace: default
+        wait: true
+        wait_condition:
+          type: Bound
+        wait_timeout: 120
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Get Longhorn system status
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ longhorn_namespace }}"
+      become_user: "{{ ansible_user }}"
+      register: longhorn_pods
+      run_once: true
+
+    - name: Display Longhorn installation summary
+      debug:
+        msg:
+          - "================================="
+          - "🗄️  LONGHORN STORAGE READY!"
+          - "================================="
+          - ""
+          - "✅ Longhorn distributed storage installed"
+          - "✅ Default storage class set to 'longhorn'"
+          - "✅ Test PVC successfully created and bound"
+          - ""
+          - "📊 System Status:"
+          - "  Namespace: {{ longhorn_namespace }}"
+          - "  Version: {{ longhorn_version }}"
+          - "  Pods Running: {{ longhorn_pods.resources | selectattr('status.phase', 'equalto', 'Running') | list | length }}"
+          - ""
+          - "🔧 Access Longhorn UI:"
+          - "  kubectl port-forward -n {{ longhorn_namespace }} svc/longhorn-frontend 8080:80"
+          - "  Then visit: http://localhost:8080"
+          - ""
+          - "📝 Usage:"
+          - "  All new PVCs will use Longhorn by default"
+          - "  Backup/restore capabilities available"
+          - "  Volume snapshots supported"
+      run_once: true
+
+    - name: Clean up temporary files
+      file:
+        path: "/tmp/longhorn-values.yaml"
+        state: absent

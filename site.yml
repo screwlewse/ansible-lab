@@ -18,13 +18,14 @@
           - "  ✓ SSH security hardening"
           - "  ✓ Docker container runtime"
           - "  ✓ Kubernetes (k3s) platform"
+          - "  ✓ Longhorn distributed storage"
           - "  ✓ Platform management tools (kubectl, helm)"
           - "  ✓ User accounts and permissions"
           - "  ✓ System optimization for containers"
           - ""
           - "Target hosts: {{ groups['homelab'] | join(', ') }}"
           - ""
-          - "⏱️  Total estimated time: 15-20 minutes"
+          - "⏱️  Total estimated time: 20-25 minutes"
           - "🚀 Starting in 5 seconds..."
 
     - name: Pause before starting
@@ -32,27 +33,30 @@
         seconds: 5
 
 # Phase 1: OS Foundation
-- name: "Phase 1/7: 🔄 System Updates & Essential Packages"
+- name: "Phase 1/8: 🔄 System Updates & Essential Packages"
   import_playbook: playbooks/update_os.yml
 
-- name: "Phase 2/7: 🔐 SSH Security Configuration"
+- name: "Phase 2/8: 🔐 SSH Security Configuration"
   import_playbook: playbooks/configure_ssh.yml
 
 # Phase 2: Container Platform
-- name: "Phase 3/7: 🐳 Docker Installation"
+- name: "Phase 3/8: 🐳 Docker Installation"
   import_playbook: playbooks/install_docker.yml
 
-- name: "Phase 4/7: ☸️  Kubernetes (k3s) Setup"
+- name: "Phase 4/8: ☸️  Kubernetes (k3s) Setup"
   import_playbook: playbooks/install_kubernetes.yml
 
+- name: "Phase 5/8: 🗄️  Longhorn Distributed Storage"
+  import_playbook: playbooks/install_longhorn_storage.yml
+
 # Phase 3: Platform Tools
-- name: "Phase 5/7: 🛠️  Platform Tools Installation"
+- name: "Phase 6/8: 🛠️  Platform Tools Installation"
   import_playbook: playbooks/install_platform_tools.yml
 
-- name: "Phase 6/7: 👥 User Account Setup"
+- name: "Phase 7/8: 👥 User Account Setup"
   import_playbook: playbooks/setup_users.yml
 
-- name: "Phase 7/7: ⚙️  System Configuration & Optimization"
+- name: "Phase 8/8: ⚙️  System Configuration & Optimization"
   import_playbook: playbooks/configure_systems.yml
 
 # Final Summary
