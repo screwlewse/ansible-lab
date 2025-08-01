@@ -1,0 +1,395 @@
+---
+- name: Install Linkerd Service Mesh
+  hosts: all
+  become: true
+  vars_files:
+    - ../group_vars/all.yml
+
+  vars:
+    linkerd_namespace: "linkerd"
+    linkerd_viz_namespace: "linkerd-viz"
+    linkerd_version: "stable-2.14.5"
+
+  tasks:
+    - name: Check if linkerd CLI is installed
+      command: which linkerd
+      register: linkerd_cli_check
+      failed_when: false
+      changed_when: false
+      become_user: "{{ ansible_user }}"
+
+    - name: Download and install linkerd CLI
+      shell: |
+        curl -sL https://run.linkerd.io/install | sh
+        sudo mv $HOME/.linkerd2/bin/linkerd /usr/local/bin/
+      when: linkerd_cli_check.rc != 0
+      become_user: "{{ ansible_user }}"
+
+    - name: Verify linkerd CLI installation
+      command: linkerd version --client
+      register: linkerd_version_output
+      changed_when: false
+      become_user: "{{ ansible_user }}"
+
+    - name: Check cluster readiness for Linkerd
+      command: linkerd check --pre
+      register: linkerd_pre_check
+      changed_when: false
+      become_user: "{{ ansible_user }}"
+      failed_when: linkerd_pre_check.rc != 0
+
+    - name: Add Linkerd Helm repository
+      kubernetes.core.helm_repository:
+        name: linkerd
+        repo_url: https://helm.linkerd.io/stable
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Update Helm repositories
+      kubernetes.core.helm:
+        name: dummy
+        chart_ref: linkerd/linkerd-control-plane
+        state: absent
+        update_repo_cache: true
+      become_user: "{{ ansible_user }}"
+      run_once: true
+      failed_when: false
+
+    - name: Generate Linkerd trust anchor certificate
+      shell: step certificate create root.linkerd.cluster.local ca.crt ca.key --profile root-ca --no-password --insecure
+      args:
+        chdir: "/home/{{ ansible_user }}"
+        creates: "/home/{{ ansible_user }}/ca.crt"
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Generate Linkerd issuer certificate
+      shell: step certificate create identity.linkerd.cluster.local issuer.crt issuer.key --profile intermediate-ca --not-after 8760h --no-password --insecure --ca ca.crt --ca-key ca.key
+      args:
+        chdir: "/home/{{ ansible_user }}"
+        creates: "/home/{{ ansible_user }}/issuer.crt"
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Install Linkerd CRDs
+      kubernetes.core.helm:
+        name: linkerd-crds
+        chart_ref: linkerd/linkerd-crds
+        release_namespace: "{{ linkerd_namespace }}"
+        create_namespace: true
+        wait: true
+        wait_timeout: 300s
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Create Linkerd control plane values file
+      copy:
+        content: |
+          # Linkerd control plane configuration for homelab
+          clusterDomain: cluster.local
+          clusterNetworks: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+          
+          # Control plane configuration
+          controllerLogLevel: info
+          enablePodAntiAffinity: false  # Disable for single node
+          enablePodDisruptionBudget: false  # Disable for homelab
+          disableIPv6: true
+
+          # Identity configuration
+          identity:
+            issuer:
+              scheme: kubernetes.io/tls
+
+          # Controller configuration
+          controller:
+            resources:
+              requests:
+                cpu: 100m
+                memory: 50Mi
+              limits:
+                cpu: 1000m
+                memory: 250Mi
+
+          # Destination controller
+          destination:
+            resources:
+              requests:
+                cpu: 100m
+                memory: 50Mi
+              limits:
+                cpu: 1000m
+                memory: 250Mi
+
+          # Proxy injector
+          proxyInjector:
+            resources:
+              requests:
+                cpu: 100m
+                memory: 50Mi
+              limits:
+                cpu: 500m
+                memory: 250Mi
+
+          # Heartbeat configuration
+          heartbeat:
+            resources:
+              requests:
+                cpu: 100m
+                memory: 50Mi
+              limits:
+                cpu: 1000m
+                memory: 250Mi
+
+          # Proxy configuration
+          proxy:
+            resources:
+              requests:
+                cpu: 100m
+                memory: 20Mi
+              limits:
+                cpu: 1000m
+                memory: 250Mi
+        dest: "/tmp/linkerd-control-plane-values.yaml"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    - name: Install Linkerd control plane
+      kubernetes.core.helm:
+        name: linkerd-control-plane
+        chart_ref: linkerd/linkerd-control-plane
+        release_namespace: "{{ linkerd_namespace }}"
+        values_files:
+          - "/tmp/linkerd-control-plane-values.yaml"
+        values:
+          identityTrustAnchorsPEM: "{{ lookup('file', '/home/' + ansible_user + '/ca.crt') }}"
+          identity:
+            issuer:
+              tls:
+                crtPEM: "{{ lookup('file', '/home/' + ansible_user + '/issuer.crt') }}"
+                keyPEM: "{{ lookup('file', '/home/' + ansible_user + '/issuer.key') }}"
+        wait: true
+        wait_timeout: 600s
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Wait for Linkerd control plane to be ready
+      command: linkerd check
+      register: linkerd_check
+      retries: 10
+      delay: 30
+      until: linkerd_check.rc == 0
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Create Linkerd Viz values file
+      copy:
+        content: |
+          # Linkerd Viz configuration for homelab
+          
+          # Dashboard configuration
+          dashboard:
+            resources:
+              requests:
+                cpu: 100m
+                memory: 50Mi
+              limits:
+                cpu: 1000m
+                memory: 250Mi
+
+          # Prometheus configuration
+          prometheus:
+            resources:
+              requests:
+                cpu: 300m
+                memory: 300Mi
+              limits:
+                cpu: 1000m
+                memory: 1000Mi
+
+          # Grafana configuration  
+          grafana:
+            resources:
+              requests:
+                cpu: 100m
+                memory: 50Mi
+              limits:
+                cpu: 1000m
+                memory: 250Mi
+
+          # Web component
+          web:
+            resources:
+              requests:
+                cpu: 100m
+                memory: 50Mi
+              limits:
+                cpu: 1000m
+                memory: 250Mi
+
+          # Tap configuration
+          tap:
+            resources:
+              requests:
+                cpu: 100m
+                memory: 50Mi
+              limits:
+                cpu: 1000m
+                memory: 250Mi
+
+          # Tap injector
+          tapInjector:
+            resources:
+              requests:
+                cpu: 100m
+                memory: 50Mi
+              limits:
+                cpu: 500m
+                memory: 250Mi
+        dest: "/tmp/linkerd-viz-values.yaml"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    - name: Install Linkerd Viz extension
+      kubernetes.core.helm:
+        name: linkerd-viz
+        chart_ref: linkerd/linkerd-viz
+        release_namespace: "{{ linkerd_viz_namespace }}"
+        create_namespace: true
+        values_files:
+          - "/tmp/linkerd-viz-values.yaml"
+        wait: true
+        wait_timeout: 600s
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Wait for Linkerd Viz to be ready
+      command: linkerd viz check
+      register: linkerd_viz_check
+      retries: 10
+      delay: 30
+      until: linkerd_viz_check.rc == 0
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Create example workload for testing service mesh
+      copy:
+        content: |
+          ---
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: emoji-web
+            namespace: default
+            annotations:
+              linkerd.io/inject: enabled
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: emoji-web
+            template:
+              metadata:
+                labels:
+                  app: emoji-web
+              spec:
+                containers:
+                - name: web-svc
+                  image: buoyantio/emoji-svc:v11
+                  ports:
+                  - containerPort: 8080
+                  env:
+                  - name: GRPC_PORT
+                    value: "8080"
+                  resources:
+                    requests:
+                      cpu: 100m
+                      memory: 50Mi
+                    limits:
+                      cpu: 1000m
+                      memory: 250Mi
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: emoji-web
+            namespace: default
+          spec:
+            selector:
+              app: emoji-web
+            ports:
+            - port: 80
+              targetPort: 8080
+              protocol: TCP
+        dest: "/home/{{ ansible_user }}/linkerd-demo-app.yaml"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    - name: Deploy demo application with Linkerd injection
+      kubernetes.core.k8s:
+        state: present
+        src: "/home/{{ ansible_user }}/linkerd-demo-app.yaml"
+        kubeconfig: "/home/{{ ansible_user }}/.kube/config"
+      become_user: "{{ ansible_user }}"
+      run_once: true
+
+    - name: Get Linkerd services info
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Service
+        namespace: "{{ linkerd_viz_namespace }}"
+        name: web
+      become_user: "{{ ansible_user }}"
+      register: linkerd_web_service
+      run_once: true
+
+    - name: Display Linkerd installation summary
+      debug:
+        msg:
+          - "================================="
+          - "🌐 LINKERD SERVICE MESH READY!"
+          - "================================="
+          - ""
+          - "✅ Linkerd control plane installed"
+          - "✅ Linkerd Viz dashboard deployed"
+          - "✅ Demo application with sidecar injection"
+          - "✅ Automatic mTLS between services"
+          - ""
+          - "📊 Access Information:"
+          - "  Control Plane: {{ linkerd_namespace }}"
+          - "  Viz Dashboard: {{ linkerd_viz_namespace }}"
+          - "  CLI Version: {{ linkerd_version_output.stdout }}"
+          - ""
+          - "🔧 Access Linkerd Dashboard:"
+          - "  linkerd viz dashboard &"
+          - "  OR"
+          - "  kubectl port-forward -n {{ linkerd_viz_namespace }} svc/web 8084:8084"
+          - "  Then visit: http://localhost:8084"
+          - ""
+          - "📈 Service Mesh Features:"
+          - "  • Automatic sidecar proxy injection"
+          - "  • Mutual TLS (mTLS) between services"
+          - "  • Traffic metrics and observability"
+          - "  • Load balancing and circuit breaking"
+          - "  • Traffic splitting and canary deployments"
+          - ""
+          - "🧪 Test Service Mesh:"
+          - "  kubectl get pods -o wide  # See sidecar containers"
+          - "  linkerd viz stat deployments"
+          - "  linkerd viz top deployments"
+          - "  linkerd viz routes deployments"
+          - ""
+          - "💡 Add Service Mesh to Existing Apps:"
+          - "  kubectl annotate deployment/YOUR_APP linkerd.io/inject=enabled"
+          - "  kubectl rollout restart deployment/YOUR_APP"
+      run_once: true
+
+    - name: Clean up temporary files
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "/tmp/linkerd-control-plane-values.yaml"
+        - "/tmp/linkerd-viz-values.yaml"

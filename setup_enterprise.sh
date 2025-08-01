@@ -98,9 +98,7 @@ case $OPTION in
         ;;
     3)
         echo "🌐 Installing Service Mesh..."
-        # This will be created in the next tasks  
-        echo "⚠️  Service mesh playbook will be available after completing all tasks"
-        echo "For now, you can deploy via ArgoCD after installing GitOps"
+        ansible-playbook -i inventories/homelab.ini playbooks/install_linkerd_service_mesh.yml
         ;;
     4)
         echo "🚀 Installing All Enterprise Components..."
@@ -113,7 +111,11 @@ case $OPTION in
         ansible-playbook -i inventories/homelab.ini playbooks/install_monitoring_stack.yml
         
         echo ""
-        echo "Phase 3: Additional components can be deployed via ArgoCD"
+        echo "Phase 3: Service Mesh"
+        ansible-playbook -i inventories/homelab.ini playbooks/install_linkerd_service_mesh.yml
+        
+        echo ""
+        echo "Phase 4: Additional components can be deployed via ArgoCD"
         echo "See ~/applications/ directory for available components"
         ;;
     *)
@@ -158,6 +160,15 @@ if [ $? -eq 0 ]; then
         echo "📈 Prometheus Metrics:"
         echo "   kubectl port-forward -n monitoring svc/prometheus-server 9090:80"
         echo "   Visit: http://localhost:9090"
+        echo ""
+    fi
+    
+    if [[ $OPTION == "3" || $OPTION == "4" ]]; then
+        echo "🌐 Linkerd Service Mesh Dashboard:"
+        echo "   linkerd viz dashboard &"
+        echo "   OR"
+        echo "   kubectl port-forward -n linkerd-viz svc/web 8084:8084"
+        echo "   Visit: http://localhost:8084"
         echo ""
     fi
     
