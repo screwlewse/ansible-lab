@@ -17,6 +17,50 @@ if [ ! -f "group_vars/all.yml" ]; then
     exit 1
 fi
 
+# Define homelab SSH key paths
+HOMELAB_KEY="$HOME/.ssh/homelab"
+HOMELAB_KEY_PUB="$HOME/.ssh/homelab.pub"
+
+# Check if homelab SSH key exists, create if missing
+if [ ! -f "$HOMELAB_KEY" ] || [ ! -f "$HOMELAB_KEY_PUB" ]; then
+    echo "🔑 Homelab SSH key not found, generating new key..."
+    echo "   Key will be saved as: $HOMELAB_KEY"
+    echo "   This key has no passphrase for automation"
+    echo ""
+    
+    # Create .ssh directory if it doesn't exist
+    mkdir -p "$HOME/.ssh"
+    chmod 700 "$HOME/.ssh"
+    
+    # Generate new SSH key with no passphrase
+    if ssh-keygen -t ed25519 -f "$HOMELAB_KEY" -N "" -C "homelab-ansible-key" >/dev/null 2>&1; then
+        echo "✅ Homelab SSH key generated successfully"
+        echo "   Public key: $HOMELAB_KEY_PUB"
+        echo "   Private key: $HOMELAB_KEY"
+    else
+        echo "❌ Error: Failed to generate SSH key"
+        exit 1
+    fi
+    echo ""
+else
+    echo "✅ Using existing homelab SSH key: $HOMELAB_KEY"
+    echo ""
+fi
+
+# Update group_vars/all.yml with the homelab key information
+echo "🔧 Updating Ansible configuration..."
+HOMELAB_KEY_CONTENT=$(cat "$HOMELAB_KEY_PUB")
+
+# Create or update group_vars/all.yml
+cat > group_vars/all.yml << EOF
+ansible_user: "davidg"
+ansible_ssh_private_key_file: "$HOMELAB_KEY"
+ssh_public_key: "$HOMELAB_KEY_CONTENT"
+EOF
+
+echo "✅ Ansible configuration updated with homelab key"
+echo ""
+
 # Parse command line arguments
 INVENTORY_FILE="inventories/homelab.ini"
 while [[ $# -gt 0 ]]; do
@@ -93,12 +137,12 @@ SUCCESS_COUNT=0
 for TARGET_IP in "${TARGET_IPS[@]}"; do
     echo "📡 Processing $TARGET_IP..."
     
-    # Use ssh-copy-id to copy the key
-    if ssh-copy-id -i ~/.ssh/id_ed25519.pub davidg@$TARGET_IP 2>/dev/null; then
+    # Use ssh-copy-id to copy the homelab key
+    if ssh-copy-id -i "$HOMELAB_KEY_PUB" davidg@$TARGET_IP 2>/dev/null; then
         echo "✅ SSH key copied to $TARGET_IP"
         
         # Test the connection
-        if ssh -o ConnectTimeout=5 -o BatchMode=yes davidg@$TARGET_IP 'echo "Connection test successful"' >/dev/null 2>&1; then
+        if ssh -o ConnectTimeout=5 -o BatchMode=yes -i "$HOMELAB_KEY" davidg@$TARGET_IP 'echo "Connection test successful"' >/dev/null 2>&1; then
             echo "✅ SSH connection verified for $TARGET_IP"
             ((SUCCESS_COUNT++))
         else

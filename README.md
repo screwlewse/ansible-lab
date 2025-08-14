@@ -9,7 +9,7 @@ This Ansible-based automation project provides a streamlined 3-step base setup t
 ## Quick Start
 
 ```bash
-# Step 1: Copy SSH keys to fresh Ubuntu install
+# Step 1: Auto-generate SSH keys and deploy to target hosts
 ./setup_ssh.sh
 
 # Step 2: Bootstrap system (one-time sudo password prompt)
@@ -25,7 +25,7 @@ This Ansible-based automation project provides a streamlined 3-step base setup t
 ## Project Structure
 
 ### Setup Scripts
-- `setup_ssh.sh` - Copies SSH keys to target hosts for passwordless authentication
+- `setup_ssh.sh` - Auto-generates homelab SSH keys and deploys to target hosts
 - `bootstrap.sh` - Initial system bootstrap with sudo configuration and prerequisites  
 - `setup_homelab.sh` - Complete automated platform setup orchestrator
 - `setup_enterprise.sh` - Optional enterprise components (GitOps, monitoring, service mesh)

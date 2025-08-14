@@ -125,6 +125,8 @@ ansible-lab/
 ```bash
 ./setup_ssh.sh [-i inventory_file]
 ```
+- **Auto-generates** a dedicated `homelab` SSH key (no passphrase) if missing
+- Updates Ansible configuration automatically
 - Deploys SSH public keys to target servers
 - Enables passwordless authentication
 - Validates connectivity
@@ -161,6 +163,7 @@ ansible-lab/
 
 ### Automation & IaC
 - **Full Automation**: Complete cluster deployment with minimal user input
+- **Self-contained SSH**: Auto-generates dedicated SSH keys with no external dependencies
 - **Idempotent Operations**: Safe to run multiple times
 - **Modular Design**: Individual components can be deployed separately
 - **Environment Management**: Support for dev, staging, production configurations
