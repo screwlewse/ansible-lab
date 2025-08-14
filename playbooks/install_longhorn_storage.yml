@@ -132,9 +132,6 @@
         values_files:
           - "/tmp/longhorn-values.yaml"
         wait: true
-        wait_condition:
-          type: Ready
-          status: "True"
         wait_timeout: 600s
       become_user: "{{ ansible_user }}"
       run_once: true
@@ -147,9 +144,6 @@
         label_selectors:
           - app=longhorn-manager
         wait: true
-        wait_condition:
-          type: Ready
-          status: "True"
         wait_timeout: 300
       become_user: "{{ ansible_user }}"
       run_once: true
@@ -227,8 +221,6 @@
         name: longhorn-test-pvc
         namespace: default
         wait: true
-        wait_condition:
-          type: Bound
         wait_timeout: 120
       become_user: "{{ ansible_user }}"
       run_once: true

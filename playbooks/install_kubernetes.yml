@@ -47,7 +47,7 @@
 
     - name: Download and install k3s agent (worker nodes)
       shell: |
-        curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} K3S_TOKEN={{ k3s_token }} K3S_URL=https://{{ hostvars[groups['all'][0]]['ansible_default_ipv4']['address'] }}:6443 sh -
+        curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} K3S_TOKEN={{ k3s_token }} K3S_URL=https://{{ hostvars[groups['servers'][0]]['ansible_host'] | default(groups['servers'][0]) }}:6443 sh -
       when: 
         - not k3s_binary.stat.exists
         - inventory_hostname in groups.get('agents', [])

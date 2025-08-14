@@ -65,10 +65,6 @@ if [ ${#TARGET_IPS[@]} -eq 0 ]; then
     echo "❌ Error: Could not find any target IPs in $INVENTORY_FILE"
     exit 1
 fi
-if [ -z "$TARGET_IP" ]; then
-    echo "❌ Error: Could not find target IP in inventory file"
-    exit 1
-fi
 
 echo "🎯 Target systems found: ${#TARGET_IPS[@]}"
 for ip in "${TARGET_IPS[@]}"; do
